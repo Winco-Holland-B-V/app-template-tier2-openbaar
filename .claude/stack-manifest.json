@@ -71,7 +71,7 @@
     "`browser` in stack.config.json) zijn van de template."
   ],
   "manifestFormaat": 2,
-  "stackVersion": 43,
+  "stackVersion": 44,
   "variant": "cloudflare-openbaar",
   "template": "app-template-tier2-openbaar",
   "vanDeTemplate": {

@@ -26,7 +26,8 @@ import { describe, expect, it } from "vitest";
  * .claude/stack-manifest.json van de huidige stand (vervangen: vervangen; alsHetOntbreekt: alleen
  * als het ontbreekt; package.json: de sleutels samengevoegd; AGENTS.md: tussen de markeringen).
  * Alles van het project blijft van de vorige uitgave: src/, supabase/, stack.config.json. De app
- * krijgt een eigen tabel, zodat "dit is niet de template" ook voor de migraties waar is. Daarin
+ * krijgt een eigen tabel met haar A/B-test (in een klantportaal verplicht), zodat "dit is niet
+ * de template" ook voor de migraties waar is. Daarin
  * draaien de typecontrole, de lint, de unittests en de guards die geen database nodig hebben.
  *
  * Alleen in de template zelf (herkend zoals guard-template dat doet). In een app slaat hij over:
@@ -199,6 +200,36 @@ create policy "notities_eigen" on public.notities
   with check (public.is_goedgekeurde_klant() and owner_id = auth.uid());
 `;
 
+/**
+ * De A/B-test bij die eigen tabel. In een klantportaal is hij voor elke tabel verplicht
+ * (guard:rls-tests), dus een echte app op de vorige uitgave heeft hem al: zonder was haar eigen
+ * poort rood. De types van de database kennen de tabel niet (die maakt de app zelf opnieuw);
+ * daarom `as never`, zoals tests/rls/klantportaal-ab.test.ts.
+ */
+// Het pad van de hulp staat los: tests/unit/template-afhankelijk.test.ts leest elke verwijzing
+// in dit bestand als een verwijzing vanuit tests/unit/, en deze geldt vanuit tests/rls/.
+const AB_HULP = ["./lib", "afscherming"].join("/");
+const EIGEN_AB_TEST = `import { it } from "vitest";
+import { controleerAfscherming, keurGoedAlsKlant } from "${AB_HULP}";
+
+it("notities: B ziet de rij van A niet", async () => {
+  await controleerAfscherming({
+    tabel: "notities" as never,
+    maakRijAlsA: async (a) => {
+      await keurGoedAlsKlant(a);
+      const { data, error } = await a.client
+        .from("notities" as never)
+        .insert({ owner_id: a.id, omschrijving: "van A" } as never)
+        .select("id")
+        .single();
+      if (error) throw error;
+      return (data as { id: string }).id;
+    },
+    voorbereidB: (b) => keurGoedAlsKlant(b),
+  });
+});
+`;
+
 /** Bouwt de nagebootste app en geeft de map terug. */
 function bouwAfgeleideApp(tag: string, manifest: Manifest): string {
   const map = mkdtempSync(join(tmpdir(), "afgeleide-app-"));
@@ -218,6 +249,7 @@ function bouwAfgeleideApp(tag: string, manifest: Manifest): string {
     if (weg.some((re) => re.test(pad))) rmSync(join(map, pad));
   }
   writeFileSync(join(map, "supabase/migrations/20990101000000_notities.sql"), EIGEN_MIGRATIE);
+  writeFileSync(join(map, "tests/rls/notities.test.ts"), EIGEN_AB_TEST);
 
   const inApp = (...args: string[]) => git(args, map);
   inApp("init", "-q", "-b", "main");
