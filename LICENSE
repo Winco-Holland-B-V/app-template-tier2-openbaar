@@ -1,0 +1,15 @@
+Licentie van deze app
+
+De code die specifiek voor deze app is gemaakt, zoals schermen, functies, servercode,
+databaseopzet en teksten, is van <organisatie>. Alle rechten voorbehouden.
+
+Een deel van de bestanden komt uit de template en de plugin van Stage Two; welke dat zijn,
+staat in .claude/stack-manifest.json onder "vanDeTemplate". Voor die onderdelen geldt het
+gebruiksrecht van Stage Two in LICENSE-STAGE-TWO. Onderdelen van derden, zoals
+open-sourcebibliotheken, vallen onder hun eigen licenties.
+
+Dit bestand is van de organisatie zelf: zij mag het aanpassen of vervangen, bijvoorbeeld
+door een open-sourcelicentie voor haar eigen code. Een update van Stage Two raakt het niet
+aan. /stagetwo-tier2:nieuwe-app vult bij een nieuwe app de naam van de organisatie in.
+In de template zelf staat er nog <organisatie>; de template is in zijn geheel een onderdeel
+van Stage Two en valt onder LICENSE-STAGE-TWO.

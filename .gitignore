@@ -1,0 +1,30 @@
+node_modules/
+dist/
+coverage/
+
+# Omgevingsvariabelen: nooit in git. .env.example wel, die staat er expres in.
+.env
+.env.*
+!.env.example
+
+# Playwright
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# Editors / OS
+.DS_Store
+*.log
+
+# Compound Engineering: tijdelijke werkbestanden van skills
+.context/compound-engineering/
+
+# Lokale toestand van wrangler (Cloudflare): nooit in git
+.wrangler/
+.dev.vars*
+
+# Gegenereerde types: `pnpm typecheck` maakt ze opnieuw
+.react-router/
+worker-configuration.d.ts
+.testlat/

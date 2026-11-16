@@ -1,0 +1,18 @@
+{
+  "extraKnownMarketplaces": {
+    "stagetwo-tier2": {
+      "source": {
+        "source": "github",
+        "repo": "Winco-Holland-B-V/stagetwo-plugin-tier2"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "stagetwo-tier2@stagetwo-tier2": true
+  },
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  }
+}

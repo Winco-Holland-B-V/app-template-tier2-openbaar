@@ -1,0 +1,10 @@
+allowBuilds:
+  esbuild: true
+  workerd: true
+# pnpm installeert een versie pas als die minstens een dag oud is: zo heeft een gekaapt
+# pakket een dag om ontdekt te worden. Een uitzondering mag alleen tijdelijk, met op de regel
+# erboven tot wanneer en waarom:
+#   # tot JJJJ-MM-DD: <reden>
+# tests/unit/pakketleeftijd.test.ts wordt rood als die regel ontbreekt of de datum voorbij is.
+# Haal de uitzondering dan weg (de versie is inmiddels oud genoeg) en draai `pnpm install`.
+minimumReleaseAgeExclude: []

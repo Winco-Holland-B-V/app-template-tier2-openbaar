@@ -1,0 +1,6 @@
+# Adressen op workers.dev (het hoofdadres en de previews per pull request) horen niet in een
+# zoekmachine. Voor pagina's regelt de servercode dat; deze regel doet hetzelfde voor de
+# bestanden die Cloudflare zonder de servercode serveert (scripts, stijl, iconen).
+# guard:cloudflare controleert dat dit bestand precies deze ene regel bevat.
+https://:versie.:subdomein.workers.dev/*
+  X-Robots-Tag: noindex, nofollow
