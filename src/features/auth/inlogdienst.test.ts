@@ -95,9 +95,23 @@ describe("leesInlogdiensten", () => {
     }
   });
 
-  it("weigert wachtwoord naast een andere dienst: dat is alleen voor lokaal en de tests", () => {
-    const uitkomst = leesInlogdiensten("cloudflare,wachtwoord");
-    expect(uitkomst.ok).toBe(false);
-    if (!uitkomst.ok) expect(uitkomst.fout).toContain("wachtwoord");
+  it("laat wachtwoord naast cloudflare toe: klanten met een wachtwoord, medewerkers via Cloudflare", () => {
+    expect(leesInlogdiensten("cloudflare,wachtwoord")).toEqual({
+      ok: true,
+      diensten: ["cloudflare", "wachtwoord"],
+    });
+  });
+
+  it("weigert wachtwoord naast een andere klantdienst (mailcode, google, azure)", () => {
+    for (const tekst of [
+      "wachtwoord,mailcode",
+      "cloudflare,wachtwoord,mailcode",
+      "google,wachtwoord",
+      "azure,wachtwoord",
+    ]) {
+      const uitkomst = leesInlogdiensten(tekst);
+      expect(uitkomst.ok, tekst).toBe(false);
+      if (!uitkomst.ok) expect(uitkomst.fout).toContain("wachtwoord");
+    }
   });
 });

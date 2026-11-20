@@ -125,6 +125,40 @@ export type Database = {
           },
         ];
       };
+      klant_uitnodigingen: {
+        Row: {
+          afgerond_op: string | null;
+          e_mail: string;
+          id: string;
+          naam: string | null;
+          sleutel: string;
+          uitgenodigd_door: string | null;
+          uitgenodigd_op: string;
+          user_id: string | null;
+        };
+        ComputedFields: never;
+        Insert: {
+          afgerond_op?: string | null;
+          e_mail: string;
+          id?: string;
+          naam?: string | null;
+          sleutel: string;
+          uitgenodigd_door?: string | null;
+          uitgenodigd_op?: string;
+          user_id?: string | null;
+        };
+        Update: {
+          afgerond_op?: string | null;
+          e_mail?: string;
+          id?: string;
+          naam?: string | null;
+          sleutel?: string;
+          uitgenodigd_door?: string | null;
+          uitgenodigd_op?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
       klanten: {
         Row: {
           aangemeld_op: string;
@@ -304,6 +338,8 @@ export type Database = {
       is_medewerker: { Args: Record<PropertyKey, never>; Returns: boolean };
       klant_aanmelden: { Args: Record<PropertyKey, never>; Returns: undefined };
       klant_beoordelen: { Args: { p_doe: string; p_klant: string }; Returns: undefined };
+      klant_uitnodiging_afronden: { Args: { p_sleutel: string }; Returns: string };
+      klantaccount_toestaan: { Args: { event: Json }; Returns: boolean };
       openbare_producten: {
         Args: { p_slug?: string };
         Returns: {

@@ -289,6 +289,30 @@ klanten met een code per mail (tien cijfers, een kwartier geldig;
 inlogpagina openen en per mail een account maken. De regels in de database zijn dan de enige
 grens, en die mogen dus alleen leunen op wat een klant niet zelf in de hand heeft.
 
+**Klantaccounts (sinds versie 46).** Een portaal met een vaste klantenkring kan in plaats van de
+code per mail accounts met een wachtwoord gebruiken (`VITE_INLOGDIENST=cloudflare,wachtwoord`; de
+owner zet `"klantportaal_inloggen": "account"` in `toegang.json` van de beheer-repo en App
+inrichten doet de rest). Dan maakt niemand zelf een account:
+
+- een medewerker nodigt een klant uit; de app roept daarvoor de Edge Function
+  `klant-uitnodigen` aan, die controleert of de aanroeper medewerker is, de uitnodiging met een
+  geheime sleutel op `klant_uitnodigingen` zet en Supabase de uitnodigingsmail laat sturen. Het
+  account staat daarna meteen goedgekeurd op `klanten`;
+- de aanmeld-hook van de inrichting laat een nieuw account per mail alleen door met die sleutel
+  (`klantaccount_toestaan()` in `supabase/migrations/20261120100000_klantaccounts.sql`);
+- de klant kiest een wachtwoord op `/wachtwoord-instellen` (minstens tien tekens; de link wisselt
+  pas om na een klik) en logt in op `/login`. Wachtwoord kwijt: `/wachtwoord-vergeten`;
+- op `/account` zet een klant zelf een **tweede stap** aan: een code uit een authenticator-app.
+  De eis zit in de database, niet alleen in het scherm: heeft een klant een bevestigde factor,
+  dan telt hij in `is_goedgekeurde_klant()` alleen als klant in een sessie die de code gaf
+  (`aal2`). Wie alleen het wachtwoord kent, ziet niets. Telefoon kwijt: de owner haalt de factor
+  weg in Supabase (Authentication, Users).
+
+De pagina's bestaan alleen als `wachtwoord` in `VITE_INLOGDIENST` staat; bij de code per mail
+geven ze 404. Een bestaand klantportaal dat versie 46 overneemt, krijgt de migratie
+`20261120100000_klantaccounts.sql` mee: zonder die migratie wordt de databasecontrole rood
+(`is_goedgekeurde_klant()` is veranderd).
+
 Wat een klant wel zelf in de hand heeft, en waar dus nooit een recht aan mag hangen:
 
 - **Een e-mailadres.** Supabase kent één account per adres, hoe je ook inlogt. Wie bij de

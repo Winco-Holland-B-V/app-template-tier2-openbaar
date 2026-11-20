@@ -77,14 +77,18 @@ describe("src/onderdelen.ts", () => {
 
 describe("scripts/lib/onderdelen.mjs: welke paden tellen", () => {
   it.runIf(inDeTemplate)(
-    "de routes van deze app: de voorbeeldshop (met de lijst op /), /klanten en /login uit src/routes.ts",
+    "de routes van deze app: de voorbeeldshop (met de lijst op /), /klanten, /login en de pagina's van klantaccounts uit src/routes.ts",
     () => {
       expect(hoofdpadenVanDeApp).toEqual([
         "/",
+        "/account",
         "/bestellingen",
         "/klanten",
         "/login",
         "/producten",
+        "/tweede-stap",
+        "/wachtwoord-instellen",
+        "/wachtwoord-vergeten",
         "/wagen",
       ]);
     },

@@ -740,10 +740,16 @@ describe("bestellen terwijl de wagen verandert", () => {
     for (let ronde = 0; ronde < RONDES; ronde++) {
       await inWagen(eva, goedkoop, 1);
       const sleutel = crypto.randomUUID();
+      // Het totaal dat de klant zag, vóór de wedloop gelezen: zo vertrekken de bestellingen
+      // tegelijk met de wijzigingen, en niet een leesronde later. Anders wint de wagen bijna
+      // altijd, op een trage machine elke ronde, en toetst de test het plaatsen niet meer.
+      const p_verwacht_totaal = await getoondTotaal(eva.client);
+      const bestel = () =>
+        eva.client.rpc("bestelling_plaatsen", { p_sleutel: sleutel, p_verwacht_totaal });
       const [een, twee] = await Promise.all([
         // Twee keer dezelfde sleutel (dubbel klikken), midden in de wijzigingen.
-        plaats(eva.client, sleutel),
-        plaats(eva.client, sleutel),
+        bestel(),
+        bestel(),
         eva.client.rpc("wagen_toevoegen", { p_product_id: duur.id, p_aantal: 99 }),
         eva.client.rpc("wagen_toevoegen", { p_product_id: duur.id, p_aantal: 99 }),
         eva.client.from("winkelwagen_regels").update({ aantal: 50 }).eq("product_id", duur.id),

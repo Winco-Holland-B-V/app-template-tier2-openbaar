@@ -21,6 +21,12 @@ export default [
   // Inloggen: de pagina met haar formulieren, en het adres waar de inlogdienst naar terugkomt.
   route("login", "routes/login.tsx"),
   route("login/terug", "routes/login-terug.ts"),
+  // Klantportaal met accounts (`cloudflare,wachtwoord`): wachtwoord kiezen of vergeten, de
+  // tweede stap (2FA) na het wachtwoord, en Mijn account. Zonder wachtwoord bestaan ze niet (404).
+  route("wachtwoord-instellen", "routes/wachtwoord-instellen.tsx"),
+  route("wachtwoord-vergeten", "routes/wachtwoord-vergeten.tsx"),
+  route("tweede-stap", "routes/tweede-stap.tsx"),
+  route("account", "routes/account.tsx"),
   // Voor zoekmachines: geen scherm, alleen een bestand.
   route("sitemap.xml", "routes/sitemap.ts"),
   route("robots.txt", "routes/robots.ts"),

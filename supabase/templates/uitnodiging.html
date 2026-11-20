@@ -1,0 +1,16 @@
+<!--
+  De uitnodiging voor een klantaccount. Een medewerker vraagt hem aan in de app (Edge
+  Function klant-uitnodigen); Supabase verstuurt hem. supabase/config.toml gebruikt dit bestand
+  lokaal en in CI ([auth.email.template.invite]); in productie zet de inrichting hetzelfde.
+
+  De link gaat naar /wachtwoord-instellen van de app, met token_hash en type=invite. Die pagina
+  wisselt de link pas om na een klik op de knop (een POST): een virusscanner die links vooraf
+  opent, verbruikt hem zo niet. De tests lezen de link uit het element met id="link".
+
+  Het adres van de app komt uit SiteURL, niet uit RedirectTo.
+-->
+<h2>Je account staat klaar</h2>
+<p>Er staat een account voor je klaar op {{ .SiteURL }}.</p>
+<p><a id="link" href="{{ .SiteURL }}/wachtwoord-instellen?token_hash={{ .TokenHash }}&type=invite">Kies je wachtwoord</a></p>
+<p>Daarna log je in met je e-mailadres en dat wachtwoord. De link werkt een dag.</p>
+<p>Verwachtte je deze mail niet? Dan hoef je niets te doen.</p>

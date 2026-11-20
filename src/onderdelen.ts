@@ -27,6 +27,12 @@ export const ONDERDELEN: Onderdeel[] = [
  */
 export const GEEN_ONDERDEEL: string[] = [
   "/login",
+  // Klantportaal met accounts: wachtwoord, tweede stap (2FA) en Mijn account. Zonder
+  // `wachtwoord` in VITE_INLOGDIENST bestaan ze niet.
+  "/account",
+  "/tweede-stap",
+  "/wachtwoord-instellen",
+  "/wachtwoord-vergeten",
   // Alleen voor medewerkers; een klant of de testgebruiker ziet hier alleen de uitleg.
   "/klanten",
   "/producten",

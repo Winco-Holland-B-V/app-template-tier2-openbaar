@@ -34,7 +34,15 @@ type Props = {
   merk: string;
 };
 
-function Pagina({ kop, merk, children }: { kop: string; merk: string; children: ReactNode }) {
+export function Pagina({
+  kop,
+  merk,
+  children,
+}: {
+  kop: string;
+  merk: string;
+  children: ReactNode;
+}) {
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-6 px-5 py-10">
       {merk ? (
@@ -48,7 +56,7 @@ function Pagina({ kop, merk, children }: { kop: string; merk: string; children: 
   );
 }
 
-function Melding({ id, children }: { id?: string; children: ReactNode }) {
+export function Melding({ id, children }: { id?: string; children: ReactNode }) {
   return (
     <p id={id} role="alert" className="text-sm text-destructive">
       {children}
@@ -65,7 +73,17 @@ export function Inlogpagina({ stand, uitkomst, merk }: Props) {
       <WachtwoordFormulier
         merk={merk}
         testlogin={stand.testlogin}
-        melding={uitkomst?.soort === "wachtwoord" ? uitkomst.melding : null}
+        email={uitkomst?.soort === "wachtwoord" ? uitkomst.email : ""}
+        melding={
+          uitkomst?.soort === "wachtwoord"
+            ? uitkomst.melding
+            : uitkomst?.soort === "dienst"
+              ? null
+              : (stand.fout?.tekst ?? null)
+        }
+        robotSleutel={stand.robotSleutel}
+        knoppen={stand.knoppen}
+        uitkomst={uitkomst}
       />
     );
   }
@@ -131,7 +149,7 @@ export function Inlogpagina({ stand, uitkomst, merk }: Props) {
 }
 
 /** Hier zet Turnstile zijn widget neer. Meestal blijft het vak leeg en onzichtbaar. */
-function Robotvak({ robot }: { robot: Robotcontrole | null }) {
+export function Robotvak({ robot }: { robot: Robotcontrole | null }) {
   return robot ? (
     <>
       <div ref={robot.vak} data-testid="robotcontrole" className="empty:hidden" />
@@ -149,7 +167,7 @@ function Robotvak({ robot }: { robot: Robotcontrole | null }) {
  * Een formulier dat een code aanvraagt. Zonder controle tegen robots is het een gewoon
  * formulier. Met: eerst het bewijs van de controle ophalen en dat meesturen als `captcha`.
  */
-function useAanvraag(robot: Robotcontrole | null) {
+export function useAanvraag(robot: Robotcontrole | null) {
   const submit = useSubmit();
   const [wacht, setWacht] = useState(false);
   const [mislukt, setMislukt] = useState<Fout | null>(null);
@@ -489,17 +507,35 @@ function AlIngelogd({
   );
 }
 
-/** Alleen lokaal en in de tests (`VITE_INLOGDIENST=wachtwoord`); een klantportaal kent dit niet. */
+/**
+ * E-mail en wachtwoord: de klanten van dit portaal (`VITE_INLOGDIENST=cloudflare,wachtwoord`),
+ * met daaronder de knop voor medewerkers. Een account maakt een medewerker (een uitnodiging
+ * per mail); wie zijn wachtwoord kwijt is, vraagt op /wachtwoord-vergeten een nieuw aan. Met
+ * `VITE_TURNSTILE_SITEKEY` draait de controle tegen robots mee en gaat het bewijs als
+ * `captcha` naar de server. Alleen lokaal (de dev-server) staat de testlogin erboven.
+ */
 function WachtwoordFormulier({
   merk,
   testlogin,
+  email,
   melding,
+  robotSleutel,
+  knoppen,
+  uitkomst,
 }: {
   merk: string;
   testlogin: string | null;
+  email: string;
   melding: string | null;
+  robotSleutel: string | null;
+  knoppen: readonly Knopdienst[];
+  uitkomst: Inloguitkomst | undefined;
 }) {
-  const bezig = useNavigation().state !== "idle";
+  const robot = useRobotcontrole(robotSleutel ?? undefined);
+  const aanvraag = useAanvraag(robot);
+  const navigatie = useNavigation();
+  const bezig = aanvraag.wacht || navigatie.formData?.get("doe") === "wachtwoord";
+  const toon = aanvraag.mislukt?.tekst ?? melding;
   return (
     <Pagina kop="Inloggen" merk={merk}>
       {testlogin ? (
@@ -507,7 +543,7 @@ function WachtwoordFormulier({
         // wachtwoord blijft op de server; in een gebouwde versie is er nooit een testlogin.
         <Form method="post" className="flex flex-col gap-2 rounded-md border border-dashed p-4">
           <input type="hidden" name="doe" value="testlogin" />
-          <Button type="submit" disabled={bezig}>
+          <Button type="submit" disabled={navigatie.state !== "idle"}>
             Inloggen als testgebruiker
           </Button>
           <p className="text-xs text-muted-foreground">
@@ -515,21 +551,55 @@ function WachtwoordFormulier({
           </p>
         </Form>
       ) : null}
-      <Form method="post" className="flex flex-col gap-4" noValidate>
+      <Form method="post" className="flex flex-col gap-4" onSubmit={aanvraag.verstuur} noValidate>
         <input type="hidden" name="doe" value="wachtwoord" />
         <div className="flex flex-col gap-2">
           <Label htmlFor="email">E-mailadres</Label>
-          <Input id="email" name="email" type="email" autoComplete="email" />
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            inputMode="email"
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="h-12 text-base"
+            defaultValue={email}
+          />
         </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor="password">Wachtwoord</Label>
-          <Input id="password" name="password" type="password" autoComplete="current-password" />
+          <Input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            className="h-12 text-base"
+          />
         </div>
-        {melding ? <Melding>{melding}</Melding> : null}
-        <Button type="submit" disabled={bezig}>
+        {toon ? <Melding>{toon}</Melding> : null}
+        <Robotvak robot={robot} />
+        <Button type="submit" size="lg" className="h-12 text-base" disabled={bezig}>
           {bezig ? "Bezig…" : "Inloggen"}
         </Button>
+        <Link
+          to="/wachtwoord-vergeten"
+          className="text-sm text-primary underline-offset-4 hover:underline"
+        >
+          Wachtwoord vergeten?
+        </Link>
       </Form>
+      {knoppen.length > 0 ? (
+        <>
+          <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-hidden="true">
+            <span className="h-px flex-1 bg-border" />
+            of
+            <span className="h-px flex-1 bg-border" />
+          </div>
+          <Dienstknoppen diensten={knoppen} uitkomst={uitkomst} />
+        </>
+      ) : null}
     </Pagina>
   );
 }

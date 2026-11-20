@@ -1,0 +1,13 @@
+<!--
+  Wachtwoord vergeten: de mail na /wachtwoord-vergeten. supabase/config.toml gebruikt dit bestand
+  lokaal en in CI ([auth.email.template.recovery]); in productie zet de inrichting hetzelfde.
+
+  De link gaat naar /wachtwoord-instellen van de app, met token_hash en type=recovery; de pagina
+  wisselt hem pas om na een klik (een POST). De tests lezen de link uit het element met id="link".
+  Het adres van de app komt uit SiteURL, niet uit RedirectTo: iedereen kan voor elk adres een
+  mail aanvragen.
+-->
+<h2>Een nieuw wachtwoord</h2>
+<p>Je hebt gevraagd om een nieuw wachtwoord voor {{ .SiteURL }}.</p>
+<p><a id="link" href="{{ .SiteURL }}/wachtwoord-instellen?token_hash={{ .TokenHash }}&type=recovery">Kies een nieuw wachtwoord</a></p>
+<p>Heb je dit niet zelf gevraagd? Dan hoef je niets te doen: je wachtwoord blijft zoals het is.</p>

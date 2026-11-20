@@ -1,15 +1,18 @@
 {
   "$beschrijving": [
-    "De basis van het klantportaal zoals de template hem maakt (supabase/migrations/20261114100000_klantportaal.sql):",
+    "De basis van het klantportaal zoals de template hem maakt (supabase/migrations/20261114100000_klantportaal.sql, en is_goedgekeurde_klant uit 20261120100000_klantaccounts.sql):",
     "per functie de hash van de tekst, en wat er verder vast hoort te staan; de trigger op auth.users; de tabel klanten.",
     "De databasecontrole (scripts/lib/klantportaal-database.mjs) vergelijkt de database hiermee: een app die een",
     "basisfunctie verandert, is rood met de melding \"de basisfunctie X is gewijzigd\".",
+    "\"eerder\": de hash van de tekst uit een eerdere versie van de template die nog goed is (is_goedgekeurde_klant van",
+    "versie 43 tot en met 45, zonder de eis van de tweede stap). Een app die de migratie met de klantaccounts niet heeft, blijft zo groen.",
     "Dit bestand is van de template. tests/unit/klantportaal-basis.test.ts bewaakt dat het klopt met de migratie;",
     "tests/rls/klantportaal-controle.test.ts dat het klopt met de echte database."
   ],
   "functies": {
     "is_goedgekeurde_klant": {
-      "hash": "cb12f4338256f8885c9546e0d5c30400198490e22467fdccf2d586ac7d7c6281",
+      "hash": "4552afe7d66198ac85ab6c736c85626acfeae6ce4f3224013c9a1beccaee3c8c",
+      "eerder": ["cb12f4338256f8885c9546e0d5c30400198490e22467fdccf2d586ac7d7c6281"],
       "definer": true,
       "zoekpad": ["search_path=\"\""],
       "eigenaar": "postgres",

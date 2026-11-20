@@ -835,6 +835,31 @@ describe("welke manieren van inloggen aan staan", () => {
     expect(testlogin.status).toBe(400);
   });
 
+  it("klantportaal met wachtwoord (`cloudflare,wachtwoord`): formulier én knop, inloggen zonder aanmelden als klant", async () => {
+    const t = await laad("cloudflare,wachtwoord");
+    expect(await lees(await t.open("/login"))).toMatchObject({
+      stap: "wachtwoord",
+      knoppen: ["cloudflare"],
+      robotSleutel: null,
+    });
+    t.supabase((v) =>
+      naar(v, "/auth/v1/token")
+        ? Response.json(nieuweSessie(t.hulp, "klant-a@voorbeeld.nl"))
+        : undefined,
+    );
+    const goed = await t.verstuur("/login", {
+      doe: "wachtwoord",
+      email: "klant-a@voorbeeld.nl",
+      password: "een-lang-wachtwoord",
+    });
+    expect(goed.status).toBe(302);
+    expect(gezet(goed).has(SESSIE)).toBe(true);
+    // Een klantaccount maakt een medewerker: geen klant_aanmelden na een wachtwoord.
+    expect(t.verzoeken.some((v) => v.adres.includes("/rpc/"))).toBe(false);
+    // De testlogin bestaat alleen in de dev-server.
+    expect((await t.verstuur("/login", { doe: "testlogin" })).status).toBe(400);
+  });
+
   it("een formulier dat de pagina niet kent, doet niets", async () => {
     const t = await laad();
     const antwoord = await t.verstuur("/login", { doe: "word-beheerder" });
@@ -979,6 +1004,60 @@ describe("de rem vóór Supabase", () => {
     const otp = t.verzoeken.filter((v) => naar(v, "/auth/v1/otp"));
     expect(otp).toHaveLength(1);
     expect(otp[0]?.body).toContain(echt);
+  });
+
+  it("wachtwoord: na vijf foute pogingen in deze browser gaat de volgende een minuut niet naar Supabase", async () => {
+    const t = await laad("cloudflare,wachtwoord");
+    t.supabase((v) =>
+      naar(v, "/auth/v1/token")
+        ? Response.json({ error_code: "invalid_credentials", msg: "x" }, { status: 400 })
+        : undefined,
+    );
+    let Cookie = "";
+    for (let i = 0; i < 9; i++) {
+      const antwoord = await t.verstuur(
+        "/login",
+        { doe: "wachtwoord", email: "klant@klant.nl", password: `fout-wachtwoord-${i}` },
+        { Cookie },
+      );
+      const velden = onthouden(antwoord);
+      if (Object.keys(velden).length > 0) Cookie = t.cookie(velden);
+      expect(antwoord.status, `poging ${i + 1}`).toBe(i >= 5 ? 429 : 400);
+    }
+    expect(t.verzoeken.filter((v) => naar(v, "/auth/v1/token"))).toHaveLength(5);
+    // Een andere browser (zonder dat cookie) wordt niet geremd: geen blokkade per account.
+    const ander = await t.verstuur("/login", {
+      doe: "wachtwoord",
+      email: "klant@klant.nl",
+      password: "nog-een-poging",
+    });
+    expect(ander.status).toBe(400);
+    expect(t.verzoeken.filter((v) => naar(v, "/auth/v1/token"))).toHaveLength(6);
+  });
+
+  it("wachtwoord met Turnstile aan: zonder bewijs niet naar Supabase, met bewijs gaat het mee als captcha_token", async () => {
+    const t = await laad("cloudflare,wachtwoord", { VITE_TURNSTILE_SITEKEY: "0x4AAAA-test" });
+    expect((await lees(await t.open("/login"))).robotSleutel).toBe("0x4AAAA-test");
+    for (const captcha of ["", "verzonnen"]) {
+      const antwoord = await t.verstuur("/login", {
+        doe: "wachtwoord",
+        email: "klant@klant.nl",
+        password: "een-lang-wachtwoord",
+        captcha,
+      });
+      expect(antwoord.status, captcha).toBe(400);
+    }
+    expect(t.verzoeken.filter((v) => naar(v, "/auth/v1/token"))).toEqual([]);
+    const echt = `0.${"Ab1_-".repeat(40)}`;
+    await t.verstuur("/login", {
+      doe: "wachtwoord",
+      email: "klant@klant.nl",
+      password: "een-lang-wachtwoord",
+      captcha: echt,
+    });
+    const token = t.verzoeken.filter((v) => naar(v, "/auth/v1/token"));
+    expect(token).toHaveLength(1);
+    expect(token[0]?.body).toContain(echt);
   });
 
   it("dezelfde browser vraagt binnen de minuut geen tweede mail voor hetzelfde adres aan", async () => {

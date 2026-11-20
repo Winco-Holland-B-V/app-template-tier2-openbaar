@@ -12,10 +12,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  *   azure       Supabase logt zelf in bij Microsoft.
  *   google      Supabase logt zelf in bij Google.
  *   mailcode    Supabase stuurt een mail met een code van tien cijfers en een link.
- *   wachtwoord  e-mail en wachtwoord; alleen lokaal en in CI, voor de tests.
+ *   wachtwoord  e-mail en wachtwoord. Alleen: lokaal en in CI, voor de tests. Naast
+ *               `cloudflare`: de klanten van een klantportaal met accounts, met een account
+ *               dat een medewerker aanmaakt (Edge Function klant-uitnodigen).
  *
- * Een klantportaal zet er twee naast elkaar: `VITE_INLOGDIENST=cloudflare,mailcode`.
- * Medewerkers loggen dan in via Cloudflare, klanten met een code per mail. Welke rechten
+ * Een klantportaal zet er twee naast elkaar. Met een code per mail (`"klantportaal_inloggen":
+ * "code"` in toegang.json): `VITE_INLOGDIENST=cloudflare,mailcode`. Met accounts (`"account"`):
+ * `VITE_INLOGDIENST=cloudflare,wachtwoord`; niemand maakt dan zelf een account (zie
+ * docs/routes/klantportaal.md, "Met accounts"). Medewerkers loggen altijd in via Cloudflare. Welke rechten
  * iemand daarna heeft, bepaalt de database en nooit deze pagina: zie
  * `sessie_via_cloudflare()` in supabase/migrations en docs/WERKWIJZE.md.
  */
@@ -27,8 +31,9 @@ export type Inlogdienst = (typeof INLOGDIENSTEN)[number];
  * (`cloudflare,mailcode`). Geeft de diensten in de opgegeven volgorde, of een fout in
  * gewone taal. Eén dienst geeft precies wat het altijd gaf: een lijst met die ene dienst.
  *
- * `wachtwoord` staat altijd alleen: het is er voor lokaal en de tests, en hoort nooit
- * naast een echte dienst op een inlogpagina te staan.
+ * `wachtwoord` staat alleen, of naast `cloudflare` (klanten met een wachtwoord, medewerkers
+ * via Cloudflare). Naast een andere dienst nooit: twee manieren voor klanten op één pagina
+ * (wachtwoord en code per mail, of wachtwoord en Google) maken twee accounts op één adres.
  */
 export function leesInlogdiensten(
   tekst: string,
@@ -48,10 +53,13 @@ export function leesInlogdiensten(
     }
     diensten.push(dienst);
   }
-  if (diensten.length > 1 && diensten.includes("wachtwoord")) {
+  if (
+    diensten.includes("wachtwoord") &&
+    diensten.some((dienst) => dienst !== "wachtwoord" && dienst !== "cloudflare")
+  ) {
     return {
       ok: false,
-      fout: "VITE_INLOGDIENST: `wachtwoord` is alleen voor lokaal en de tests en kan niet naast een andere dienst staan.",
+      fout: "VITE_INLOGDIENST: `wachtwoord` staat alleen, of naast `cloudflare` (medewerkers via Cloudflare, klanten met een wachtwoord).",
     };
   }
   return { ok: true, diensten };

@@ -196,6 +196,7 @@ describe("de inlogpagina, kant-en-klaar van de server", () => {
       knoppen: [],
       stap: "wachtwoord",
       testlogin: "testgebruiker@stagetwo.nl",
+      fout: null,
     });
     const doe = formulieren(pagina).map((f) => /name="doe" value="([^"]+)"/.exec(f)?.[1]);
     expect(doe).toEqual(["testlogin", "wachtwoord"]);

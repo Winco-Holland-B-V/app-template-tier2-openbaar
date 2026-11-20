@@ -295,7 +295,7 @@ function metEigenDomein(tekst: string): string {
   );
 }
 
-/** De types van de eigen database: het klantportaal van de template en de eigen tabel. */
+/** De types van de eigen database: het klantportaal van de template (ook de klantaccounts) en de eigen tabel. */
 function eigenTypes(template: string): string {
   const begin = template.indexOf("  public: {");
   const eind = template.indexOf("\ntype DatabaseWithoutInternals");
@@ -303,6 +303,39 @@ function eigenTypes(template: string): string {
     throw new Error("src/lib/database.types.ts heeft een onbekende vorm");
   const eigen = `  public: {
     Tables: {
+      klant_uitnodigingen: {
+        Row: {
+          afgerond_op: string | null;
+          e_mail: string;
+          id: string;
+          naam: string | null;
+          sleutel: string;
+          uitgenodigd_door: string | null;
+          uitgenodigd_op: string;
+          user_id: string | null;
+        };
+        Insert: {
+          afgerond_op?: string | null;
+          e_mail: string;
+          id?: string;
+          naam?: string | null;
+          sleutel: string;
+          uitgenodigd_door?: string | null;
+          uitgenodigd_op?: string;
+          user_id?: string | null;
+        };
+        Update: {
+          afgerond_op?: string | null;
+          e_mail?: string;
+          id?: string;
+          naam?: string | null;
+          sleutel?: string;
+          uitgenodigd_door?: string | null;
+          uitgenodigd_op?: string;
+          user_id?: string | null;
+        };
+        Relationships: [];
+      };
       klanten: {
         Row: { aangemeld_op: string; e_mail: string; goedgekeurd: boolean; user_id: string };
         Insert: { aangemeld_op?: string; e_mail: string; goedgekeurd?: boolean; user_id: string };
@@ -323,6 +356,8 @@ function eigenTypes(template: string): string {
       is_goedgekeurde_klant: { Args: Record<PropertyKey, never>; Returns: boolean };
       is_medewerker: { Args: Record<PropertyKey, never>; Returns: boolean };
       klant_aanmelden: { Args: Record<PropertyKey, never>; Returns: undefined };
+      klant_uitnodiging_afronden: { Args: { p_sleutel: string }; Returns: string };
+      klantaccount_toestaan: { Args: { event: Json }; Returns: boolean };
       sessie_via_cloudflare: { Args: Record<PropertyKey, never>; Returns: boolean };
     };
     Enums: {

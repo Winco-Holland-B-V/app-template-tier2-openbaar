@@ -25,6 +25,7 @@ import {
   wisDienstInlog,
 } from "@/features/auth/mailcode";
 import { isBewijsVorm } from "@/features/auth/robotcontrole";
+import { tweedeStapAdres, tweedeStapNodig } from "@/features/auth/tweede-stap";
 import { env, inlogdiensten, testloginVoorDev } from "@/lib/env";
 import { gebruiker, heeftServerDatabase, supabaseVoorVerzoek } from "@/lib/server/sessie.server";
 import { cookieOverHttps, sessieCookieNaam } from "@/lib/server/sessie-cookie";
@@ -59,7 +60,7 @@ type Context = Readonly<RouterContextProvider>;
 type Basis = {
   metMail: boolean;
   knoppen: Knopdienst[];
-  /** De sitekey van Turnstile, alleen als er per mail wordt ingelogd; anders null. */
+  /** De sitekey van Turnstile, alleen bij inloggen per mail of met een wachtwoord; anders null. */
   robotSleutel: string | null;
   /** Waar het na het inloggen heen gaat; al nagekeken, altijd een pad binnen de app. */
   volgende: string;
@@ -78,7 +79,7 @@ export type Inlogstand = Basis &
         melding: string | null;
       }
     | { stap: "adres"; email: string; fout: Fout | null }
-    | { stap: "wachtwoord"; testlogin: string | null }
+    | { stap: "wachtwoord"; testlogin: string | null; fout: Fout | null }
   );
 
 /** Wat een formulier teruggeeft als het niet met een omleiding eindigt. */
@@ -87,7 +88,7 @@ export type Inloguitkomst =
   | { soort: "adres"; email: string; fout: Fout }
   | { soort: "code"; email: string; verstuurdOp: number | null; fout: Fout }
   | { soort: "dienst"; fout: Fout }
-  | { soort: "wachtwoord"; melding: string };
+  | { soort: "wachtwoord"; email: string; melding: string };
 
 /** Een uitkomst met een eigen status (400, 429, 502): de pagina toont hem gewoon. */
 type Inlogantwoord = Inloguitkomst | ReturnType<typeof data<Inloguitkomst>>;
@@ -113,12 +114,15 @@ const NIEUWE_CODE = "Er is een nieuwe code verstuurd.";
 
 function basis(volgende: string): Basis {
   const metMail = inlogdiensten.includes("mailcode");
+  const metWachtwoord = inlogdiensten.includes("wachtwoord");
   return {
     metMail,
     knoppen: inlogdiensten.filter((dienst: Inlogdienst): dienst is Knopdienst =>
       isKnopdienst(dienst),
     ),
-    robotSleutel: metMail ? (env.VITE_TURNSTILE_SITEKEY ?? null) : null,
+    // De controle tegen robots bij alles wat een klant zelf intypt: de code per mail, en het
+    // wachtwoord (Supabase controleert het bewijs dan ook bij het inloggen; zie robotcontrole.ts).
+    robotSleutel: metMail || metWachtwoord ? (env.VITE_TURNSTILE_SITEKEY ?? null) : null,
     volgende,
   };
 }
@@ -188,7 +192,12 @@ export async function inlogstand(context: Context, request: Request): Promise<In
 
   if (!gemeen.metMail) {
     if (inlogdiensten.includes("wachtwoord")) {
-      return { ...gemeen, stap: "wachtwoord", testlogin: testloginVoorDev()?.email ?? null };
+      return {
+        ...gemeen,
+        stap: "wachtwoord",
+        testlogin: testloginVoorDev()?.email ?? null,
+        fout: eenmalig,
+      };
     }
     return { ...gemeen, stap: "adres", email: "", fout: eenmalig };
   }
@@ -293,14 +302,25 @@ function wisGeheimeHelften(context: Context): void {
   wisCookies(context, (rest) => rest.endsWith("-code-verifier"), true);
 }
 
-/** Na zoveel foute codes in één browser wacht de volgende poging even. */
+/** Na zoveel foute codes (of wachtwoorden) in één browser wacht de volgende poging even. */
 export const CODE_FOUTEN_VRIJ = 5;
 export const CODE_FOUTEN_WACHT_MS = 60 * 1000;
 const CODE_FOUTEN = "code-fouten";
+/**
+ * De rem op wachtwoorden raden, per browser: na vijf foute wachtwoorden een minuut wachten. Geen
+ * blokkade per account: dan kon een vreemde een klant buitensluiten door vijf keer fout te typen.
+ * Een script dat dit cookie weggooit, remt Supabase (grens per IP-adres), Turnstile en de regel
+ * van Cloudflare op POST /login (docs/klantaccounts.md).
+ */
+const WACHTWOORD_FOUTEN = "wachtwoord-fouten";
 
-/** Hoeveel foute codes deze browser gaf, en hoe lang de volgende poging nog wacht. */
-function codeFouten(opslag: Inlogopslag, nu: number): { aantal: number; wachtNog: number } {
-  const [aantal, op] = (opslag.getItem(CODE_FOUTEN) ?? "").split(":").map(Number);
+/** Hoeveel foute pogingen deze browser deed, en hoe lang de volgende poging nog wacht. */
+function codeFouten(
+  opslag: Inlogopslag,
+  nu: number,
+  sleutel: string = CODE_FOUTEN,
+): { aantal: number; wachtNog: number } {
+  const [aantal, op] = (opslag.getItem(sleutel) ?? "").split(":").map(Number);
   if (
     !Number.isInteger(aantal) ||
     !Number.isFinite(op) ||
@@ -366,22 +386,47 @@ export async function inloggen(context: Context, request: Request): Promise<Inlo
     if (!inlogdiensten.includes("wachtwoord")) {
       throw data("Deze manier van inloggen staat voor deze app niet aan.", { status: 400 });
     }
+    // De testlogin bestaat alleen in de dev-server (testloginVoorDev geeft daarbuiten null).
     const testlogin = doe === "testlogin" ? testloginVoorDev() : null;
+    if (doe === "testlogin" && !testlogin) {
+      throw data("Deze manier van inloggen staat voor deze app niet aan.", { status: 400 });
+    }
+    const ingevuld = veld(form, "email").slice(0, 320);
+    // Te veel foute wachtwoorden in deze browser: eerst even wachten, zonder Supabase te vragen.
+    const fouten = codeFouten(opslag, nu, WACHTWOORD_FOUTEN);
+    if (!testlogin && fouten.wachtNog > 0) {
+      return weiger({ soort: "wachtwoord", email: ingevuld, melding: fout("te-vaak").tekst }, 429);
+    }
+    const ruwBewijs = veld(form, "captcha") || veld(form, "cf-turnstile-response");
+    const captcha = isBewijsVorm(ruwBewijs) ? ruwBewijs : "";
+    if (!testlogin && gemeen.robotSleutel && !captcha) {
+      return weiger({ soort: "wachtwoord", email: ingevuld, melding: fout("robot").tekst }, 400);
+    }
     const invoer = testlogin
       ? { success: true as const, data: { email: testlogin.email, password: testlogin.wachtwoord } }
-      : credentialsSchema.safeParse({
-          email: veld(form, "email"),
-          password: veld(form, "password"),
-        });
-    const antwoord = invoer.success ? await supabase.auth.signInWithPassword(invoer.data) : null;
+      : credentialsSchema.safeParse({ email: ingevuld, password: veld(form, "password") });
+    const antwoord = invoer.success
+      ? await supabase.auth.signInWithPassword({
+          ...invoer.data,
+          ...(captcha ? { options: { captchaToken: captcha } } : {}),
+        })
+      : null;
     if (!antwoord || antwoord.error) {
+      if (!testlogin) opslag.setItem(WACHTWOORD_FOUTEN, `${fouten.aantal + 1}:${nu}`);
       const melding =
         doe === "testlogin"
           ? "Inloggen als testgebruiker is niet gelukt. Haal een nieuwe testlogin op met `pnpm testlogin`."
           : "Inloggen is niet gelukt. Controleer je e-mailadres en wachtwoord.";
-      return weiger({ soort: "wachtwoord", melding }, 400);
+      return weiger({ soort: "wachtwoord", email: ingevuld, melding }, 400);
     }
-    await naInloggen(context, opslag, true);
+    // Bij een klantportaal met accounts (`cloudflare,wachtwoord`) geen aanmelding als klant: een
+    // klantaccount maakt een medewerker, goedgekeurd en wel (Edge Function klant-uitnodigen). Wie
+    // zonder uitnodiging een wachtwoord heeft (een medewerker via "wachtwoord vergeten"), is
+    // daarmee geen klant en geen medewerker. Alleen lokaal en in de tests (`wachtwoord` alleen)
+    // meldt het account zich aan, zoals na een code per mail.
+    await naInloggen(context, opslag, inlogdiensten.length === 1);
+    // Heeft de klant de tweede stap (2FA) aangezet, dan eerst de code uit zijn app.
+    if (await tweedeStapNodig(supabase)) throw redirect(tweedeStapAdres(gemeen.volgende));
     throw redirect(gemeen.volgende);
   }
 

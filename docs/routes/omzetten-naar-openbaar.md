@@ -338,6 +338,14 @@ bijvoorbeeld `is_klant_van_bedrijf()`, die `public.is_goedgekeurde_klant()` aanr
 eigen koppeling controleert, met een reden in `klantportaal_poorten`. Geef de tabel van de
 template geen andere naam en herschrijf `is_goedgekeurde_klant()` niet.
 
+**Let op bij het hernoemen van een eigen tabel `klanten`.** `alter table ... rename` past
+policies, views, sleutels en triggers vanzelf aan, maar niet de tekst van een functie. Een functie
+met `klanten%rowtype`, `from klanten` of `public.klanten` in haar body wijst na het hernoemen nog
+steeds naar de naam `klanten`, en dus straks naar de tabel van de template: zonder foutmelding,
+met de verkeerde gegevens. Zoek ze op (`grep -rn "klanten" supabase/migrations`, en in de
+database `select proname from pg_proc where prosrc ~ '\mklanten\M'`) en schrijf elke gevonden
+functie in dezelfde migratie opnieuw met `create or replace`, met de nieuwe naam.
+
 Tot de databasejob de types maakt: draai na de push `pnpm db:types:uit-ci`.
 
 Goed als: `node scripts/guard-rls.mjs`, `node scripts/guard-rls-tests.mjs` en
@@ -386,7 +394,8 @@ Eén pull request, als concept, met in de tekst:
 
 **Wat de owner daarna doet.** Na de merge, in de beheer-repo: de deur van Cloudflare voor het
 eigen domein uitzetten, de inlog per mail (de code) aanzetten in Supabase, en
-`VITE_INLOGDIENST` op `cloudflare,mailcode` zetten. Zolang dat niet gebeurd is, toont de app
+`VITE_INLOGDIENST` op `cloudflare,mailcode` zetten (met `"klantportaal_inloggen": "account"` in
+`toegang.json`: `cloudflare,wachtwoord`, zie "Klantaccounts" in `docs/WERKWIJZE.md`). Zolang dat niet gebeurd is, toont de app
 in productie "Deze app is nog niet ingericht" in plaats van een inlogformulier dat nergens
 werkt. Dat is werk van de owner, niet van de bouwer: zeg het de bouwer, en wacht er niet op.
 
