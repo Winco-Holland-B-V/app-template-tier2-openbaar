@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { type InlogAuth, inlogVorm, leesInlogdiensten, startInloggen } from "./inlogdienst";
+import {
+  type InlogAuth,
+  inlogVorm,
+  isVooraf,
+  leesInlogdiensten,
+  startInloggen,
+} from "./inlogdienst";
 
 function nepAuth(fout: { message: string } | null = null) {
   return {
@@ -102,16 +108,43 @@ describe("leesInlogdiensten", () => {
     });
   });
 
-  it("weigert wachtwoord naast een andere klantdienst (mailcode, google, azure)", () => {
+  it("laat wachtwoord naast cloudflare en mailcode toe, met of zonder google: de stand vooraf", () => {
+    expect(leesInlogdiensten("cloudflare,mailcode,wachtwoord")).toEqual({
+      ok: true,
+      diensten: ["cloudflare", "mailcode", "wachtwoord"],
+    });
+    expect(leesInlogdiensten("cloudflare,mailcode,google,wachtwoord")).toEqual({
+      ok: true,
+      diensten: ["cloudflare", "mailcode", "google", "wachtwoord"],
+    });
+    // De volgorde doet er niet toe.
+    expect(leesInlogdiensten("wachtwoord,mailcode,cloudflare").ok).toBe(true);
+  });
+
+  it("weigert wachtwoord naast een andere klantdienst als cloudflare of mailcode ontbreekt, en naast azure", () => {
     for (const tekst of [
       "wachtwoord,mailcode",
-      "cloudflare,wachtwoord,mailcode",
       "google,wachtwoord",
       "azure,wachtwoord",
+      "cloudflare,google,wachtwoord",
+      "mailcode,google,wachtwoord",
+      "cloudflare,mailcode,azure,wachtwoord",
+      "cloudflare,mailcode,google,azure,wachtwoord",
     ]) {
       const uitkomst = leesInlogdiensten(tekst);
       expect(uitkomst.ok, tekst).toBe(false);
       if (!uitkomst.ok) expect(uitkomst.fout).toContain("wachtwoord");
     }
+  });
+});
+
+describe("isVooraf", () => {
+  it("alleen met cloudflare, mailcode en wachtwoord (eventueel google), zonder azure", () => {
+    expect(isVooraf(["cloudflare", "mailcode", "wachtwoord"])).toBe(true);
+    expect(isVooraf(["cloudflare", "mailcode", "google", "wachtwoord"])).toBe(true);
+    expect(isVooraf(["cloudflare", "mailcode"])).toBe(false);
+    expect(isVooraf(["cloudflare", "wachtwoord"])).toBe(false);
+    expect(isVooraf(["wachtwoord"])).toBe(false);
+    expect(isVooraf(["cloudflare", "mailcode", "azure", "wachtwoord"])).toBe(false);
   });
 });

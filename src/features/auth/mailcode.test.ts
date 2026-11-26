@@ -64,6 +64,25 @@ describe("vraagCode", () => {
     });
   });
 
+  it("in de stand vooraf maakt een code nooit een account, en een onbekend adres ziet er hetzelfde uit", async () => {
+    const auth = nepAuth();
+    expect(
+      await vraagCode(auth, "piet@klant.nl", TERUG, "bewijs-123", { nieuwAccount: false }),
+    ).toEqual({ ok: true });
+    expect(auth.signInWithOtp).toHaveBeenCalledWith({
+      email: "piet@klant.nl",
+      options: { emailRedirectTo: TERUG, shouldCreateUser: false, captchaToken: "bewijs-123" },
+    });
+    // Zo antwoordt Supabase bij een adres zonder account: de pagina zegt hetzelfde als bij een
+    // verstuurde mail.
+    const otp = { message: "Signups not allowed for otp", status: 422, code: "otp_disabled" };
+    expect(
+      await vraagCode(nepAuth({ otp }), "onbekend@klant.nl", TERUG, undefined, {
+        nieuwAccount: false,
+      }),
+    ).toEqual({ ok: true });
+  });
+
   it("stuurt het bewijs van de controle tegen robots mee als die aan staat", async () => {
     const auth = nepAuth();
     expect(await vraagCode(auth, "piet@klant.nl", TERUG, "bewijs-123")).toEqual({ ok: true });
@@ -209,6 +228,7 @@ describe("de link uit de mail", () => {
   it("leest alleen een link van het type email", () => {
     expect(leesLink("?token_hash=pkce_abcdef0123456789&type=email")).toEqual({
       tokenHash: "pkce_abcdef0123456789",
+      type: "email",
     });
     // Geen andere soorten links via de inlogpagina: wachtwoord herstellen, adres wijzigen.
     for (const type of ["recovery", "email_change", "invite", "signup", "magiclink", ""]) {
@@ -217,6 +237,27 @@ describe("de link uit de mail", () => {
     expect(leesLink("?token_hash=<script>&type=email")).toBeNull();
     expect(leesLink("?type=email")).toBeNull();
     expect(leesLink("")).toBeNull();
+  });
+
+  it("in de stand vooraf ook een uitnodiging en een herstellink, maar nooit een adreswijziging", () => {
+    const vooraf = ["email", "invite", "recovery"] as const;
+    for (const type of vooraf) {
+      expect(leesLink(`?token_hash=abcdef0123456789abcd&type=${type}`, vooraf)).toEqual({
+        tokenHash: "abcdef0123456789abcd",
+        type,
+      });
+    }
+    for (const type of ["email_change", "signup", "magiclink", ""]) {
+      expect(leesLink(`?token_hash=abcdef0123456789abcd&type=${type}`, vooraf)).toBeNull();
+    }
+  });
+
+  it("bevestigt een uitnodiging of herstellink met haar eigen soort", async () => {
+    for (const type of ["invite", "recovery"] as const) {
+      const auth = nepAuth();
+      expect(await controleerLink(auth, "abcdef0123456789abcd", type)).toEqual({ ok: true });
+      expect(auth.verifyOtp).toHaveBeenCalledWith({ token_hash: "abcdef0123456789abcd", type });
+    }
   });
 
   it("bevestigt de link bij Supabase", async () => {

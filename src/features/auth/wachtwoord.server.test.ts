@@ -26,6 +26,7 @@ async function laad(diensten = "cloudflare,wachtwoord", omgeving: Record<string,
   for (const [naam, waarde] of Object.entries(omgeving)) vi.stubEnv(naam, waarde);
   const hulp = await import("../../../tests/unit/server-hulp");
   const ww = await import("./wachtwoord.server");
+  const account = await import("./tweede-stap.server");
 
   const alsAntwoord = (uit: unknown): Response => {
     if (uit instanceof Response) return uit;
@@ -98,6 +99,10 @@ async function laad(diensten = "cloudflare,wachtwoord", omgeving: Record<string,
         init: Cookie ? { headers: { Cookie } } : undefined,
       }),
     vergeten: (velden: Record<string, string>) => post("/wachtwoord-vergeten", ww.vergeten, velden),
+    openAccount: (Cookie: string) =>
+      hulp.vraag(`${APP}/account`, route(account.accountStand), { init: { headers: { Cookie } } }),
+    account: (velden: Record<string, string>, Cookie: string) =>
+      post("/account", account.accountWijzigen, velden, Cookie),
   };
 }
 
@@ -269,5 +274,88 @@ describe("/wachtwoord-vergeten", () => {
     const recover = t.verzoeken.filter((v) => v.pad === "/auth/v1/recover");
     expect(recover).toHaveLength(1);
     expect(recover[0]?.body).toContain(echt);
+  });
+});
+
+describe("de stand vooraf (`cloudflare,mailcode,wachtwoord`)", () => {
+  const VOORAF = "cloudflare,mailcode,wachtwoord";
+
+  it("wachtwoord vergeten bestaat niet: de pagina en het formulier sturen door naar /login, er gaat niets naar Supabase", async () => {
+    const t = await laad(VOORAF);
+    const open = await t.openVergeten();
+    expect(open.status).toBe(302);
+    expect(open.headers.get("Location")).toBe("/login");
+    const verstuurd = await t.vergeten({ email: "klant@voorbeeld.nl" });
+    expect(verstuurd.status).toBe(302);
+    expect(verstuurd.headers.get("Location")).toBe("/login");
+    expect(t.verzoeken.filter((v) => v.pad === "/auth/v1/recover")).toEqual([]);
+  });
+
+  it("Mijn account: een wachtwoord instellen, ook zonder eerder wachtwoord; daarna één keer de melding", async () => {
+    const t = await laad(VOORAF);
+    const Cookie = t.hulp.sessieCookie({ sub: "klant-1", email: "klant@voorbeeld.nl" });
+    t.supabase((v) =>
+      v.pad === "/auth/v1/user"
+        ? Response.json({ id: "klant-1", email: "klant@voorbeeld.nl", factors: [] })
+        : undefined,
+    );
+    expect(await (await t.openAccount(Cookie)).json()).toMatchObject({
+      adres: "klant@voorbeeld.nl",
+      vooraf: true,
+      google: false,
+      melding: null,
+    });
+    const kort = await t.account(
+      { doe: "wachtwoord", wachtwoord: "kort", herhaling: "kort" },
+      Cookie,
+    );
+    expect(kort.status).toBe(400);
+    expect(await kort.json()).toMatchObject({ soort: "wachtwoord" });
+    expect(t.verzoeken.filter((v) => v.methode === "PUT")).toEqual([]);
+
+    const goed = await t.account(
+      { doe: "wachtwoord", wachtwoord: "een-lang-wachtwoord", herhaling: "een-lang-wachtwoord" },
+      Cookie,
+    );
+    expect(goed.status).toBe(302);
+    expect(goed.headers.get("Location")).toBe("/account");
+    const zet = t.verzoeken.filter((v) => v.pad === "/auth/v1/user" && v.methode === "PUT");
+    expect(zet).toHaveLength(1);
+    expect(JSON.parse(zet[0]?.body ?? "{}")).toMatchObject({ password: "een-lang-wachtwoord" });
+    const merk = goed.headers
+      .getSetCookie()
+      .find((regel) => regel.startsWith("__Host-inlog="))
+      ?.split(";")[0];
+    const daarna = await t.openAccount(`${Cookie}; ${merk}`);
+    expect(await daarna.json()).toMatchObject({ melding: "Je wachtwoord is opgeslagen." });
+  });
+
+  it("met Google in de lijst zegt Mijn account dat; in de stand account kan het wachtwoord hier niet", async () => {
+    const google = await laad("cloudflare,mailcode,google,wachtwoord");
+    const Cookie = google.hulp.sessieCookie({ sub: "klant-1", email: "klant@voorbeeld.nl" });
+    google.supabase((v) =>
+      v.pad === "/auth/v1/user"
+        ? Response.json({ id: "klant-1", email: "klant@voorbeeld.nl", factors: [] })
+        : undefined,
+    );
+    expect(await (await google.openAccount(Cookie)).json()).toMatchObject({
+      vooraf: true,
+      google: true,
+    });
+
+    const account = await laad("cloudflare,wachtwoord");
+    expect(
+      (
+        await account.account(
+          {
+            doe: "wachtwoord",
+            wachtwoord: "een-lang-wachtwoord",
+            herhaling: "een-lang-wachtwoord",
+          },
+          Cookie,
+        )
+      ).status,
+    ).toBe(400);
+    expect(account.verzoeken.filter((v) => v.methode === "PUT")).toEqual([]);
   });
 });

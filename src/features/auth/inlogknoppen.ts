@@ -5,7 +5,7 @@
 export const KNOPTEKST = {
   cloudflare: "Inloggen voor medewerkers",
   azure: "Inloggen met Microsoft",
-  google: "Inloggen met Google",
+  google: "Doorgaan met Google",
 } as const;
 
 export type Knopdienst = keyof typeof KNOPTEKST;

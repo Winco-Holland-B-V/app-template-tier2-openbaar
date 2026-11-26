@@ -1,0 +1,24 @@
+<!--
+  De inlogmail van een klantportaal in de stand `vooraf` (accounts bestaan vooraf; zie
+  src/features/auth/inlogdienst.ts). In die stand is elke mail van Supabase dezelfde inlogmail:
+  magic_link en confirmation met type=email, invite met type=invite en recovery met
+  type=recovery. Dit bestand is de versie met type=email; de inrichting zet in productie per mail
+  het type dat erbij hoort, met deze opbouw. Lokaal en in CI gebruikt supabase/config.toml de mails
+  van de stand code (inlogcode.html) en account (uitnodiging.html); dit bestand is het voorbeeld.
+
+  De tests lezen de code uit het element met id="code" en de link uit het element met id="link";
+  laat die twee staan.
+
+  De link gaat naar de inlogpagina van de app met token_hash, niet naar Supabase zelf. De pagina
+  logt in met een formulier dat een scriptje in de browser meteen verstuurt; een linkscanner die
+  de pagina zonder scripts opent, verbruikt de link niet. De link en de code werken 24 uur
+  (mailer_otp_exp in de inrichting): een link van een medewerker werkt de volgende ochtend nog.
+
+  Het adres van de app komt uit SiteURL, niet uit RedirectTo: dat geeft de aanvrager zelf op.
+-->
+<h2>Inloggen bij {{ .SiteURL }}</h2>
+<p><a id="link" href="{{ .SiteURL }}/login?token_hash={{ .TokenHash }}&type=email">Log in</a></p>
+<p>Of vul deze code in op de inlogpagina:</p>
+<p style="font-size: 28px; font-weight: bold; letter-spacing: 4px"><span id="code">{{ .Token }}</span></p>
+<p>De link en de code werken een dag.</p>
+<p>Heb je hier niet om gevraagd? Dan hoef je niets te doen. Klik niet op de link en geef de code aan niemand door.</p>

@@ -23,6 +23,8 @@ export default [
   route("login/terug", "routes/login-terug.ts"),
   // Klantportaal met accounts (`cloudflare,wachtwoord`): wachtwoord kiezen of vergeten, de
   // tweede stap (2FA) na het wachtwoord, en Mijn account. Zonder wachtwoord bestaan ze niet (404).
+  // In de stand vooraf (`cloudflare,mailcode,wachtwoord`) staat het wachtwoord op Mijn account en
+  // stuurt wachtwoord-vergeten door naar /login.
   route("wachtwoord-instellen", "routes/wachtwoord-instellen.tsx"),
   route("wachtwoord-vergeten", "routes/wachtwoord-vergeten.tsx"),
   route("tweede-stap", "routes/tweede-stap.tsx"),

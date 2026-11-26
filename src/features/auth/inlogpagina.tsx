@@ -24,6 +24,11 @@ import { cn } from "@/lib/utils";
  * JavaScript. Met JavaScript gaat het vlotter: tien cijfers typen is genoeg, de knop voor een
  * nieuwe code telt af, en de controle tegen robots draait mee.
  *
+ * In de stand `vooraf` (accounts bestaan vooraf, zie inlogdienst.ts) vraagt de klant met
+ * "Stuur me een code" een code aan, en staan daaronder "Doorgaan met Google" (als dat aan staat)
+ * en klein "Inloggen met wachtwoord". De link uit de mail logt daar meteen in: een scriptje
+ * verstuurt het formulier, zonder JavaScript staat er één knop.
+ *
  * Deze pagina staat open voor iedereen en geeft niemand rechten: dat doet de database.
  */
 type Props = {
@@ -67,7 +72,7 @@ export function Melding({ id, children }: { id?: string; children: ReactNode }) 
 export function Inlogpagina({ stand, uitkomst, merk }: Props) {
   if (stand.stap === "ingelogd") return <AlIngelogd stand={stand} uitkomst={uitkomst} />;
   if (stand.stap === "link")
-    return <LinkStap merk={merk} hierAangevraagd={stand.hierAangevraagd} />;
+    return <LinkStap merk={merk} hierAangevraagd={stand.hierAangevraagd} vanzelf={stand.vooraf} />;
   if (stand.stap === "wachtwoord") {
     return (
       <WachtwoordFormulier
@@ -84,6 +89,7 @@ export function Inlogpagina({ stand, uitkomst, merk }: Props) {
         robotSleutel={stand.robotSleutel}
         knoppen={stand.knoppen}
         uitkomst={uitkomst}
+        metCode={stand.vooraf ? loginAdres(stand.volgende) : null}
       />
     );
   }
@@ -99,6 +105,7 @@ export function Inlogpagina({ stand, uitkomst, merk }: Props) {
         fout={uitkomst.fout}
         melding={null}
         robotSleutel={stand.robotSleutel}
+        vooraf={stand.vooraf}
       />
     );
   }
@@ -111,6 +118,7 @@ export function Inlogpagina({ stand, uitkomst, merk }: Props) {
         fout={stand.fout}
         melding={stand.melding}
         robotSleutel={stand.robotSleutel}
+        vooraf={stand.vooraf}
       />
     );
   }
@@ -119,6 +127,11 @@ export function Inlogpagina({ stand, uitkomst, merk }: Props) {
     uitkomst?.soort === "adres" || uitkomst?.soort === "dienst" ? uitkomst.fout : stand.fout;
   // Een weigering na de knop voor medewerkers gaat niet over het adresveld van de klant.
   const vanDienst = fout !== null && isFoutVanDienst(fout.soort);
+  if (stand.vooraf) {
+    return (
+      <Vooraf stand={stand} uitkomst={uitkomst} merk={merk} fout={fout} vanDienst={vanDienst} />
+    );
+  }
   return (
     <Pagina kop="Inloggen" merk={merk}>
       {fout && (vanDienst || !stand.metMail) ? <Melding>{fout.tekst}</Melding> : null}
@@ -195,14 +208,82 @@ export function useAanvraag(robot: Robotcontrole | null) {
   return { verstuur, wacht, mislukt };
 }
 
+/** Het adres van de inlogpagina, met het pad waar de bezoeker heen wilde (als loginAdres op de server). */
+function loginAdres(volgende: string, extra?: string): string {
+  const zoek = new URLSearchParams(extra);
+  if (volgende !== "/") zoek.set("volgende", volgende);
+  const tekst = zoek.toString();
+  return tekst ? `/login?${tekst}` : "/login";
+}
+
+/**
+ * Het begin in de stand `vooraf`: het e-mailadres met "Stuur me een code", daaronder de knoppen
+ * (Google als dat aan staat, en die voor medewerkers) en klein "Inloggen met wachtwoord". Een
+ * adres zonder account krijgt geen mail; de pagina zegt hetzelfde als bij een bekend adres.
+ */
+function Vooraf({
+  stand,
+  uitkomst,
+  merk,
+  fout,
+  vanDienst,
+}: {
+  stand: Inlogstand;
+  uitkomst: Inloguitkomst | undefined;
+  merk: string;
+  fout: Fout | null;
+  vanDienst: boolean;
+}) {
+  // Google eerst: dat is een knop voor klanten. Die voor medewerkers als laatste.
+  const knoppen = [...stand.knoppen].sort(
+    (a, b) => Number(a === "cloudflare") - Number(b === "cloudflare"),
+  );
+  return (
+    <Pagina kop="Inloggen" merk={merk}>
+      {fout && vanDienst ? <Melding>{fout.tekst}</Melding> : null}
+      <AdresStap
+        email={
+          uitkomst?.soort === "adres" ? uitkomst.email : stand.stap === "adres" ? stand.email : ""
+        }
+        fout={vanDienst ? null : fout}
+        robotSleutel={stand.robotSleutel}
+        knoptekst="Stuur me een code"
+      />
+      {knoppen.length > 0 ? (
+        <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-hidden="true">
+          <span className="h-px flex-1 bg-border" />
+          of
+          <span className="h-px flex-1 bg-border" />
+        </div>
+      ) : null}
+      <Dienstknoppen diensten={knoppen} uitkomst={uitkomst} />
+      {knoppen.includes("google") && knoppen.includes("cloudflare") ? (
+        // Supabase koppelt Google aan het account met hetzelfde adres. Bij een medewerker telt
+        // zijn account daarna niet meer als medewerker (zie docs/WERKWIJZE.md, "Klantaccounts").
+        <p className="text-sm text-muted-foreground">
+          {`Medewerker? Log in met de knop ${KNOPTEKST.cloudflare}, niet met Google.`}
+        </p>
+      ) : null}
+      <Link
+        to={loginAdres(stand.volgende, "met=wachtwoord")}
+        className="text-sm text-primary underline-offset-4 hover:underline"
+      >
+        Inloggen met wachtwoord
+      </Link>
+    </Pagina>
+  );
+}
+
 function AdresStap({
   email,
   fout: vanServer,
   robotSleutel,
+  knoptekst = "Doorgaan",
 }: {
   email: string;
   fout: Fout | null;
   robotSleutel: string | null;
+  knoptekst?: string;
 }) {
   const robot = useRobotcontrole(robotSleutel ?? undefined);
   const aanvraag = useAanvraag(robot);
@@ -244,7 +325,7 @@ function AdresStap({
       {fout ? <Melding id="email-fout">{fout.tekst}</Melding> : null}
       <Robotvak robot={robot} />
       <Button type="submit" size="lg" className="h-12 text-base" disabled={bezig}>
-        {bezig ? "Bezig…" : "Doorgaan"}
+        {bezig ? "Bezig…" : knoptekst}
       </Button>
     </Form>
   );
@@ -257,6 +338,7 @@ function CodeStap({
   fout,
   melding,
   robotSleutel,
+  vooraf,
 }: {
   merk: string;
   email: string;
@@ -264,6 +346,7 @@ function CodeStap({
   fout: Fout | null;
   melding: string | null;
   robotSleutel: string | null;
+  vooraf: boolean;
 }) {
   const robot = useRobotcontrole(robotSleutel ?? undefined);
   const aanvraag = useAanvraag(robot);
@@ -310,8 +393,9 @@ function CodeStap({
   return (
     <Pagina kop="Vul de code in" merk={merk}>
       <p className="text-sm text-muted-foreground">
-        Verstuurd naar <span className="font-medium text-foreground">{email}</span>. De code is een
-        kwartier geldig. Je kunt ook op de link in de mail klikken.
+        Verstuurd naar <span className="font-medium text-foreground">{email}</span>.{" "}
+        {vooraf ? "De code werkt een dag." : "De code is een kwartier geldig."} Je kunt ook op de
+        link in de mail klikken.
       </p>
       <Form ref={formulier} method="post" className="flex flex-col gap-4" noValidate>
         <input type="hidden" name="doe" value="code" />
@@ -384,12 +468,40 @@ function CodeStap({
  * formulier (een POST) wisselt de link om. Een mailprogramma of virusscanner die links vooraf
  * opent, verbruikt hem zo niet. Het formulier gaat naar het adres van deze pagina, met de
  * link erin.
+ *
+ * `vanzelf` (de stand vooraf): de link komt meestal van een medewerker, en de klant hoeft niet
+ * nog een keer te klikken. Een scriptje in de browser verstuurt het formulier één keer, zodra de
+ * pagina er staat; een linkscanner opent de pagina meestal zonder scripts en verbruikt de link
+ * dan niet. Zonder JavaScript staat er één knop. Na het inloggen toont de app kort op welk adres
+ * je binnen bent (IngelogdAls).
  */
-function LinkStap({ merk, hierAangevraagd }: { merk: string; hierAangevraagd: boolean }) {
+function LinkStap({
+  merk,
+  hierAangevraagd,
+  vanzelf,
+}: {
+  merk: string;
+  hierAangevraagd: boolean;
+  vanzelf: boolean;
+}) {
   const bezig = useNavigation().state !== "idle";
+  const submit = useSubmit();
+  const formulier = useRef<HTMLFormElement>(null);
+  const verstuurd = useRef(false);
+
+  useEffect(() => {
+    if (!vanzelf || verstuurd.current || !formulier.current) return;
+    verstuurd.current = true;
+    void submit(formulier.current, { method: "post" });
+  }, [vanzelf, submit]);
+
   return (
     <Pagina kop="Inloggen" merk={merk}>
-      {hierAangevraagd ? (
+      {vanzelf ? (
+        <p className="text-sm text-muted-foreground">
+          Je wordt ingelogd. Gebeurt er niets, klik dan op de knop.
+        </p>
+      ) : hierAangevraagd ? (
         <p className="text-sm text-muted-foreground">
           Je bent er bijna. Klik op de knop om in te loggen.
         </p>
@@ -408,7 +520,7 @@ function LinkStap({ merk, hierAangevraagd }: { merk: string; hierAangevraagd: bo
           </p>
         </div>
       )}
-      <Form method="post" className="flex flex-col">
+      <Form ref={formulier} method="post" className="flex flex-col">
         <input type="hidden" name="doe" value="link" />
         <Button type="submit" size="lg" className="h-12 text-base" disabled={bezig}>
           {bezig ? "Bezig…" : "Inloggen"}
@@ -508,8 +620,8 @@ function AlIngelogd({
 }
 
 /**
- * E-mail en wachtwoord: de klanten van dit portaal (`VITE_INLOGDIENST=cloudflare,wachtwoord`),
- * met daaronder de knop voor medewerkers. Een account maakt een medewerker (een uitnodiging
+ * E-mail en wachtwoord: de klanten van dit portaal (`VITE_INLOGDIENST=cloudflare,wachtwoord`,
+ * of in de stand vooraf op `/login?met=wachtwoord`), met daaronder de knop voor medewerkers. Een account maakt een medewerker (een uitnodiging
  * per mail); wie zijn wachtwoord kwijt is, vraagt op /wachtwoord-vergeten een nieuw aan. Met
  * `VITE_TURNSTILE_SITEKEY` draait de controle tegen robots mee en gaat het bewijs als
  * `captcha` naar de server. Alleen lokaal (de dev-server) staat de testlogin erboven.
@@ -522,6 +634,7 @@ function WachtwoordFormulier({
   robotSleutel,
   knoppen,
   uitkomst,
+  metCode,
 }: {
   merk: string;
   testlogin: string | null;
@@ -530,6 +643,8 @@ function WachtwoordFormulier({
   robotSleutel: string | null;
   knoppen: readonly Knopdienst[];
   uitkomst: Inloguitkomst | undefined;
+  /** De stand vooraf: het adres van de inlogpagina met de code. Geen "wachtwoord vergeten". */
+  metCode: string | null;
 }) {
   const robot = useRobotcontrole(robotSleutel ?? undefined);
   const aanvraag = useAanvraag(robot);
@@ -583,12 +698,19 @@ function WachtwoordFormulier({
         <Button type="submit" size="lg" className="h-12 text-base" disabled={bezig}>
           {bezig ? "Bezig…" : "Inloggen"}
         </Button>
-        <Link
-          to="/wachtwoord-vergeten"
-          className="text-sm text-primary underline-offset-4 hover:underline"
-        >
-          Wachtwoord vergeten?
-        </Link>
+        {metCode ? (
+          // Wachtwoord kwijt: inloggen met een code, en op Mijn account een nieuw instellen.
+          <Link to={metCode} className="text-sm text-primary underline-offset-4 hover:underline">
+            Wachtwoord vergeten of geen wachtwoord? Log in met een code per mail.
+          </Link>
+        ) : (
+          <Link
+            to="/wachtwoord-vergeten"
+            className="text-sm text-primary underline-offset-4 hover:underline"
+          >
+            Wachtwoord vergeten?
+          </Link>
+        )}
       </Form>
       {knoppen.length > 0 ? (
         <>

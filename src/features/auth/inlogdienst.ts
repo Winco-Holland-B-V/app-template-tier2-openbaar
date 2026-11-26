@@ -14,14 +14,24 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  *   mailcode    Supabase stuurt een mail met een code van tien cijfers en een link.
  *   wachtwoord  e-mail en wachtwoord. Alleen: lokaal en in CI, voor de tests. Naast
  *               `cloudflare`: de klanten van een klantportaal met accounts, met een account
- *               dat een medewerker aanmaakt (Edge Function klant-uitnodigen).
+ *               dat een medewerker aanmaakt (Edge Function klant-uitnodigen). Naast
+ *               `cloudflare` en `mailcode`: de stand `vooraf` (hieronder).
  *
- * Een klantportaal zet er twee naast elkaar. Met een code per mail (`"klantportaal_inloggen":
- * "code"` in toegang.json): `VITE_INLOGDIENST=cloudflare,mailcode`. Met accounts (`"account"`):
- * `VITE_INLOGDIENST=cloudflare,wachtwoord`; niemand maakt dan zelf een account (zie
- * docs/routes/klantportaal.md, "Met accounts"). Medewerkers loggen altijd in via Cloudflare. Welke rechten
- * iemand daarna heeft, bepaalt de database en nooit deze pagina: zie
- * `sessie_via_cloudflare()` in supabase/migrations en docs/WERKWIJZE.md.
+ * Een klantportaal kent drie standen (`"klantportaal_inloggen"` in toegang.json van de
+ * beheer-repo). Medewerkers loggen in alle drie in via Cloudflare.
+ *
+ *   code     `VITE_INLOGDIENST=cloudflare,mailcode`: een klant meldt zich zelf aan met een
+ *            code per mail; een medewerker keurt hem goed.
+ *   account  `VITE_INLOGDIENST=cloudflare,wachtwoord`: niemand maakt zelf een account. Een
+ *            medewerker nodigt een klant uit, de klant kiest een wachtwoord.
+ *   vooraf   `VITE_INLOGDIENST=cloudflare,mailcode,wachtwoord`, of met Google
+ *            `cloudflare,mailcode,google,wachtwoord`: de accounts bestaan vooraf (een
+ *            medewerker maakt ze; niemand meldt zich zelf aan). Een klant logt in met een
+ *            link van een medewerker of met een code die hij zelf aanvraagt, en kan op
+ *            /account een wachtwoord instellen. Met `google` ook met "Doorgaan met Google".
+ *
+ * Zie docs/WERKWIJZE.md ("Klantaccounts"). Welke rechten iemand daarna heeft, bepaalt de
+ * database en nooit deze pagina: zie `sessie_via_cloudflare()` in supabase/migrations.
  */
 export const INLOGDIENSTEN = ["cloudflare", "azure", "google", "mailcode", "wachtwoord"] as const;
 export type Inlogdienst = (typeof INLOGDIENSTEN)[number];
@@ -31,9 +41,13 @@ export type Inlogdienst = (typeof INLOGDIENSTEN)[number];
  * (`cloudflare,mailcode`). Geeft de diensten in de opgegeven volgorde, of een fout in
  * gewone taal. Eén dienst geeft precies wat het altijd gaf: een lijst met die ene dienst.
  *
- * `wachtwoord` staat alleen, of naast `cloudflare` (klanten met een wachtwoord, medewerkers
- * via Cloudflare). Naast een andere dienst nooit: twee manieren voor klanten op één pagina
- * (wachtwoord en code per mail, of wachtwoord en Google) maken twee accounts op één adres.
+ * `wachtwoord` staat alleen, naast `cloudflare` (stand `account`), of naast `cloudflare` en
+ * `mailcode`, eventueel met `google` (stand `vooraf`). In elke andere combinatie niet: twee
+ * manieren voor klanten op één pagina waarbij iedereen zelf een account kan maken (een code per
+ * mail en een wachtwoord, of Google en een wachtwoord) maken twee accounts op één adres. In de
+ * stand `vooraf` speelt dat niet: niemand maakt daar zelf een account (de aanmeld-hook weigert),
+ * code en wachtwoord horen bij dezelfde identiteit `email`, en Google koppelt Supabase aan het
+ * account met hetzelfde adres.
  */
 export function leesInlogdiensten(
   tekst: string,
@@ -55,14 +69,29 @@ export function leesInlogdiensten(
   }
   if (
     diensten.includes("wachtwoord") &&
+    !isVooraf(diensten) &&
     diensten.some((dienst) => dienst !== "wachtwoord" && dienst !== "cloudflare")
   ) {
     return {
       ok: false,
-      fout: "VITE_INLOGDIENST: `wachtwoord` staat alleen, of naast `cloudflare` (medewerkers via Cloudflare, klanten met een wachtwoord).",
+      fout: "VITE_INLOGDIENST: `wachtwoord` staat alleen, naast `cloudflare` (medewerkers via Cloudflare, klanten met een wachtwoord), of naast `cloudflare` en `mailcode`, eventueel met `google` (accounts vooraf).",
     };
   }
   return { ok: true, diensten };
+}
+
+/**
+ * De stand `vooraf` van een klantportaal: `cloudflare`, `mailcode` en `wachtwoord`, eventueel
+ * met `google`, en niets anders. De accounts bestaan vooraf; een code per mail maakt dan nooit
+ * een account (`shouldCreateUser: false`), en de link uit de mail logt meteen in.
+ */
+export function isVooraf(diensten: readonly Inlogdienst[]): boolean {
+  return (
+    diensten.includes("cloudflare") &&
+    diensten.includes("mailcode") &&
+    diensten.includes("wachtwoord") &&
+    diensten.every((dienst) => dienst !== "azure")
+  );
 }
 
 /** Het deel van de Supabase-auth dat hier nodig is; zo is het los te testen. */

@@ -131,8 +131,11 @@ export type Uitkomst = { ok: true } | { ok: false; fout: Fout };
 
 /**
  * Stap 1: vraag een code aan voor dit adres. Supabase stuurt één mail met de code en een
- * link. `shouldCreateUser` staat aan: wie een account mag krijgen, bewaakt de server (de
- * before-user-created-hook van de inrichting), niet de browser.
+ * link. `shouldCreateUser` staat standaard aan: wie een account mag krijgen, bewaakt de server
+ * (de before-user-created-hook van de inrichting), niet de browser. In de stand `vooraf`
+ * (accounts bestaan vooraf, zie inlogdienst.ts) staat hij uit (`nieuwAccount: false`): een
+ * adres zonder account krijgt dan geen mail, en de pagina zegt hetzelfde als bij een bekend
+ * adres. De grens blijft ook dan de hook; dit scheelt alleen een vergeefse aanvraag.
  *
  * Staat bij Supabase de controle tegen robots aan, dan weigert Supabase elke aanvraag zonder
  * `captchaToken`. Het controleren van de code (stap 2) vraagt er geen.
@@ -143,6 +146,7 @@ export async function vraagCode(
   terugNaar: string,
   /** Het bewijs van de controle tegen robots; alleen als die aan staat (robotcontrole.tsx). */
   captchaToken?: string,
+  { nieuwAccount = true }: { nieuwAccount?: boolean } = {},
 ): Promise<Uitkomst> {
   const email = leesAdres(adres);
   if (!email) return { ok: false, fout: fout("adres") };
@@ -151,7 +155,7 @@ export async function vraagCode(
       email,
       options: {
         emailRedirectTo: terugNaar,
-        shouldCreateUser: true,
+        shouldCreateUser: nieuwAccount,
         ...(captchaToken ? { captchaToken } : {}),
       },
     });
@@ -191,28 +195,45 @@ export async function controleerCode(
 }
 
 /**
- * De link in de mail wijst naar de inlogpagina met `?token_hash=...&type=email`. Alleen dat
- * ene type wordt aangenomen: zo kan niemand via deze pagina een ander soort link (wachtwoord
- * herstellen, adres wijzigen) laten bevestigen.
+ * De soorten links uit een mail die naar de inlogpagina gaan. `email`: de inlogmail (en de
+ * eerste aanmelding). Alleen in de stand `vooraf` daarnaast `invite` (de eerste mail aan een
+ * nieuw account) en `recovery`: daar is elke mail een inlogmail. Een link voor een nieuw
+ * e-mailadres (`email_change`) neemt de pagina nooit aan.
  */
+export const LINKSOORTEN = ["email", "invite", "recovery"] as const;
+export type Linksoort = (typeof LINKSOORTEN)[number];
+
 const linkSchema = z.object({
   token_hash: z.string().regex(/^[A-Za-z0-9_-]{16,200}$/),
-  type: z.literal("email"),
+  type: z.enum(LINKSOORTEN),
 });
 
-export function leesLink(zoekdeel: string): { tokenHash: string } | null {
+/**
+ * De link in de mail wijst naar de inlogpagina met `?token_hash=...&type=email`. Alleen de
+ * soorten in `soorten` worden aangenomen, standaard alleen `email`: zo kan niemand via deze
+ * pagina een ander soort link (wachtwoord herstellen, adres wijzigen) laten bevestigen.
+ */
+export function leesLink(
+  zoekdeel: string,
+  soorten: readonly Linksoort[] = ["email"],
+): { tokenHash: string; type: Linksoort } | null {
   const params = new URLSearchParams(zoekdeel);
   const uitkomst = linkSchema.safeParse({
     token_hash: params.get("token_hash"),
     type: params.get("type"),
   });
-  return uitkomst.success ? { tokenHash: uitkomst.data.token_hash } : null;
+  if (!uitkomst.success || !soorten.includes(uitkomst.data.type)) return null;
+  return { tokenHash: uitkomst.data.token_hash, type: uitkomst.data.type };
 }
 
 /** De link uit de mail bevestigen. Gebeurt pas na een klik op de knop, nooit vanzelf. */
-export async function controleerLink(auth: MailcodeAuth, tokenHash: string): Promise<Uitkomst> {
+export async function controleerLink(
+  auth: MailcodeAuth,
+  tokenHash: string,
+  type: Linksoort = "email",
+): Promise<Uitkomst> {
   try {
-    const { error } = await auth.verifyOtp({ token_hash: tokenHash, type: "email" });
+    const { error } = await auth.verifyOtp({ token_hash: tokenHash, type });
     if (!error) return { ok: true };
     return { ok: false, fout: zichtbareFout(error) ?? storing(error) ?? fout("link") };
   } catch {

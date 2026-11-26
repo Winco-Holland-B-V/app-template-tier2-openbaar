@@ -1,7 +1,7 @@
 import type { Provider, SupabaseClient } from "@supabase/supabase-js";
 import { data, redirect as omleiding, type RouterContextProvider } from "react-router";
 import { type Inlogopslag, inlogOpslag } from "@/features/auth/inlogcookie.server";
-import type { Inlogdienst } from "@/features/auth/inlogdienst";
+import { type Inlogdienst, isVooraf } from "@/features/auth/inlogdienst";
 import { isKnopdienst, type Knopdienst } from "@/features/auth/inlogknoppen";
 import {
   BEGIN,
@@ -16,6 +16,8 @@ import {
   herstel,
   isDienstInlogBegonnen,
   isHierAangevraagd,
+  LINKSOORTEN,
+  type Linksoort,
   leesAdres,
   leesLink,
   merkAangevraagd,
@@ -53,12 +55,21 @@ import stackConfig from "../../../stack.config.json";
  *   4. Hetzelfde antwoord bij een bekend en een onbekend adres (dat regelt `vraagCode`).
  *   5. Deze pagina geeft niemand rechten. Wat iemand mag, bepaalt de database; of iemand
  *      medewerker is, vraagt de server aan `is_medewerker()` en besluit hij nooit zelf.
+ *
+ * De stand `vooraf` (accounts bestaan vooraf, zie inlogdienst.ts) wijkt op drie punten af. Een
+ * code per mail maakt nooit een account. De link uit de mail mag ook een uitnodiging of
+ * herstellink zijn, en de pagina verstuurt het formulier vanzelf met een scriptje in de browser
+ * (regel 1 blijft: de GET zelf logt niet in, dus een linkscanner zonder scripts verbruikt de
+ * link niet). En na het inloggen meldt niemand zich aan als klant: een account maakt een
+ * medewerker. Het wachtwoordformulier staat op `/login?met=wachtwoord`.
  */
 type Context = Readonly<RouterContextProvider>;
 
 /** Wat elke stand van de pagina nodig heeft. */
 type Basis = {
   metMail: boolean;
+  /** De stand `vooraf`: code, link van een medewerker, wachtwoord als keuze (inlogdienst.ts). */
+  vooraf: boolean;
   knoppen: Knopdienst[];
   /** De sitekey van Turnstile, alleen bij inloggen per mail of met een wachtwoord; anders null. */
   robotSleutel: string | null;
@@ -117,6 +128,7 @@ function basis(volgende: string): Basis {
   const metWachtwoord = inlogdiensten.includes("wachtwoord");
   return {
     metMail,
+    vooraf: isVooraf(inlogdiensten),
     knoppen: inlogdiensten.filter((dienst: Inlogdienst): dienst is Knopdienst =>
       isKnopdienst(dienst),
     ),
@@ -140,6 +152,20 @@ function redirect(naar: string): Response {
 /** Het adres van de inlogpagina, met het pad waar de bezoeker heen wilde erbij. */
 export function loginAdres(volgende: string): string {
   return volgende === "/" ? "/login" : `/login?volgende=${encodeURIComponent(volgende)}`;
+}
+
+/** Welke soorten links uit een mail deze pagina aanneemt (zie `leesLink` in mailcode.ts). */
+function linksoorten(gemeen: Basis): readonly Linksoort[] {
+  return gemeen.vooraf ? LINKSOORTEN : ["email"];
+}
+
+/**
+ * Moet deze sessie na een code, een link of een inlogdienst nog de tweede stap (2FA) doen? Alleen
+ * waar die bestaat: bij een build met wachtwoorden (stand account en vooraf); anders is er geen
+ * pagina `/tweede-stap`.
+ */
+async function tweedeStapNa(supabase: Parameters<typeof tweedeStapNodig>[0]): Promise<boolean> {
+  return inlogdiensten.includes("wachtwoord") && (await tweedeStapNodig(supabase));
 }
 
 /** Na het inloggen nooit terug naar de inlogpagina zelf: dan naar de startpagina. */
@@ -202,8 +228,18 @@ export async function inlogstand(context: Context, request: Request): Promise<In
     return { ...gemeen, stap: "adres", email: "", fout: eenmalig };
   }
 
-  if (leesLink(adres.search)) {
+  if (leesLink(adres.search, linksoorten(gemeen))) {
     return { ...gemeen, stap: "link", hierAangevraagd: isHierAangevraagd(opslag, nu) };
+  }
+
+  // De stand vooraf: het wachtwoordformulier is een keuze, onder "Inloggen met wachtwoord".
+  if (gemeen.vooraf && adres.searchParams.get("met") === "wachtwoord") {
+    return {
+      ...gemeen,
+      stap: "wachtwoord",
+      testlogin: testloginVoorDev()?.email ?? null,
+      fout: eenmalig,
+    };
   }
 
   const bewaard = herstel(opslag, nu);
@@ -419,11 +455,11 @@ export async function inloggen(context: Context, request: Request): Promise<Inlo
           : "Inloggen is niet gelukt. Controleer je e-mailadres en wachtwoord.";
       return weiger({ soort: "wachtwoord", email: ingevuld, melding }, 400);
     }
-    // Bij een klantportaal met accounts (`cloudflare,wachtwoord`) geen aanmelding als klant: een
-    // klantaccount maakt een medewerker, goedgekeurd en wel (Edge Function klant-uitnodigen). Wie
-    // zonder uitnodiging een wachtwoord heeft (een medewerker via "wachtwoord vergeten"), is
-    // daarmee geen klant en geen medewerker. Alleen lokaal en in de tests (`wachtwoord` alleen)
-    // meldt het account zich aan, zoals na een code per mail.
+    // Bij een klantportaal met accounts (`cloudflare,wachtwoord`, en de stand vooraf) geen
+    // aanmelding als klant: een klantaccount maakt een medewerker, goedgekeurd en wel (Edge
+    // Function klant-uitnodigen). Wie zonder uitnodiging een wachtwoord heeft (een medewerker via
+    // "wachtwoord vergeten"), is daarmee geen klant en geen medewerker. Alleen lokaal en in de
+    // tests (`wachtwoord` alleen) meldt het account zich aan, zoals na een code per mail.
     await naInloggen(context, opslag, inlogdiensten.length === 1);
     // Heeft de klant de tweede stap (2FA) aangezet, dan eerst de code uit zijn app.
     if (await tweedeStapNodig(supabase)) throw redirect(tweedeStapAdres(gemeen.volgende));
@@ -450,7 +486,9 @@ export async function inloggen(context: Context, request: Request): Promise<Inlo
     const uitkomst =
       gemeen.robotSleutel && email && !captcha
         ? ({ ok: false, fout: fout("robot") } as const)
-        : await vraagCode(supabase.auth, invoer, `${adres.origin}/login`, captcha || undefined);
+        : await vraagCode(supabase.auth, invoer, `${adres.origin}/login`, captcha || undefined, {
+            nieuwAccount: !gemeen.vooraf,
+          });
     if (!uitkomst.ok) {
       return weiger(
         { soort: "adres", email: invoer, fout: uitkomst.fout },
@@ -475,6 +513,7 @@ export async function inloggen(context: Context, request: Request): Promise<Inlo
             bewaard.email,
             `${adres.origin}/login`,
             captcha || undefined,
+            { nieuwAccount: !gemeen.vooraf },
           );
     if (uitkomst.ok) {
       bewaar(opslag, { ...bewaard, verstuurdOp: nu });
@@ -524,14 +563,17 @@ export async function inloggen(context: Context, request: Request): Promise<Inlo
     const naar = adres.searchParams.has("volgende")
       ? gemeen.volgende
       : doel(opslag.getItem("volgende") ?? "/");
-    await naInloggen(context, opslag, true);
+    // In de stand vooraf maakt een medewerker de klantaccounts: geen aanmelding.
+    await naInloggen(context, opslag, !gemeen.vooraf);
+    // Heeft de klant de tweede stap (2FA) aangezet, dan eerst de code uit zijn app.
+    if (await tweedeStapNa(supabase)) throw redirect(tweedeStapAdres(naar));
     throw redirect(naar);
   }
 
   if (doe === "link") {
-    const link = leesLink(adres.search);
+    const link = leesLink(adres.search, linksoorten(gemeen));
     const uitkomst = link
-      ? await controleerLink(supabase.auth, link.tokenHash)
+      ? await controleerLink(supabase.auth, link.tokenHash, link.type)
       : ({ ok: false, fout: fout("link") } as const);
     if (!uitkomst.ok) {
       // Naar de kale inlogpagina: de link staat daarna niet meer in de adresbalk.
@@ -540,7 +582,8 @@ export async function inloggen(context: Context, request: Request): Promise<Inlo
     }
     // Alleen als deze browser de mail zelf aanvroeg, weet hij waar de bezoeker heen wilde.
     const naar = doel(opslag.getItem("volgende") ?? "/");
-    await naInloggen(context, opslag, true);
+    await naInloggen(context, opslag, !gemeen.vooraf);
+    if (await tweedeStapNa(supabase)) throw redirect(tweedeStapAdres(naar));
     throw redirect(naar);
   }
 
@@ -573,13 +616,17 @@ export async function terugVanDienst(context: Context, request: Request): Promis
   if (uitAdres) return mislukt(uitAdres);
   if (!zelfBegonnen || !/^[A-Za-z0-9_-]{8,200}$/.test(code)) return mislukt(fout("dienst"));
 
-  const { error } = await supabaseVoorVerzoek(context).auth.exchangeCodeForSession(code);
+  const supabase = supabaseVoorVerzoek(context);
+  const { error } = await supabase.auth.exchangeCodeForSession(code);
   if (error) return mislukt(fout("dienst"));
 
   const naar = doel(opslag.getItem("volgende") ?? "/");
   wisDienstInlog(opslag);
-  // Geen aanmelding als klant: wie via de dienst binnenkomt, is medewerker of niets.
+  // Geen aanmelding als klant: wie via Cloudflare binnenkomt, is medewerker of niets; wie via
+  // Google binnenkomt (stand vooraf), heeft al een account dat een medewerker maakte.
   await naInloggen(context, opslag, false);
+  // Een klant die met Google inlogt en de tweede stap (2FA) aanzette: eerst de code uit zijn app.
+  if (await tweedeStapNa(supabase)) throw redirect(tweedeStapAdres(naar));
   throw redirect(naar);
 }
 

@@ -313,6 +313,60 @@ geven ze 404. Een bestaand klantportaal dat versie 46 overneemt, krijgt de migra
 `20261120100000_klantaccounts.sql` mee: zonder die migratie wordt de databasecontrole rood
 (`is_goedgekeurde_klant()` is veranderd).
 
+**Accounts vooraf (sinds versie 47).** Een derde stand, voor een portaal waar de accounts vooraf
+bestaan maar klanten geen wachtwoord hoeven te onthouden: `"klantportaal_inloggen": "vooraf"` in
+`toegang.json`, en App inrichten zet `VITE_INLOGDIENST=cloudflare,mailcode,wachtwoord` (met
+`"google_client_id"` bij de app: `cloudflare,mailcode,google,wachtwoord`). Net als bij `account`
+maakt niemand zelf een account; de aanmeld-hook en `klantaccount_toestaan()` zijn dezelfde, er is
+geen eigen migratie. Wat anders is:
+
+- een medewerker laat een klant een **inloglink** sturen: de app roept `klant-uitnodigen` aan met
+  `{ "e_mail": ..., "inloglink": true }`. Heeft het adres nog geen account, dan gaat het zoals bij
+  `account` (uitnodiging met sleutel, meteen goedgekeurd); de uitnodigingsmail is in deze stand een
+  inlogmail. Heeft het adres al een klantaccount (alleen de identiteit `email`, eventueel ook
+  `google`), dan laat de functie Supabase Auth een inlogmail sturen (`POST /auth/v1/otp` met
+  `create_user: false`). Een adres met een andere identiteit (een medewerker) weigert ze met
+  `andere_inlog`. De functie geeft nooit een link of code terug;
+- de link uit elke mail gaat naar `/login?token_hash=...&type=email` (bij een uitnodiging
+  `type=invite`, bij herstel `type=recovery`), met de code van tien cijfers ernaast. De pagina logt
+  in met een formulier dat een scriptje in de browser meteen verstuurt; de GET zelf logt niet in,
+  dus een linkscanner zonder scripts verbruikt de link niet. Zonder JavaScript staat er één knop.
+  Is de link verbruikt of verlopen, dan staat er een melding met "Stuur me een code". Link en code
+  werken 24 uur (`mailer_otp_exp`), zodat een link van een medewerker de volgende ochtend nog werkt;
+- wie zelf komt, vult op `/login` zijn adres in en kiest "Stuur me een code"
+  (`shouldCreateUser: false`: een adres zonder account krijgt geen mail, en de pagina zegt
+  hetzelfde als bij een bekend adres). Daaronder staan "Doorgaan met Google" (als Google aan staat)
+  en klein "Inloggen met wachtwoord" (`/login?met=wachtwoord`);
+- op `/account` stelt de klant een wachtwoord in (ook als hij er nog geen had) of wijzigt hij het,
+  zet hij de tweede stap aan, en leest hij dat "Doorgaan met Google" werkt als zijn adres een
+  Google-account is. Na een code, een link of Google vraagt de app om de tweede stap als die aan
+  staat;
+- `/wachtwoord-vergeten` stuurt door naar `/login`: wie zijn wachtwoord kwijt is, logt in met een
+  code en kiest op `/account` een nieuw. `/wachtwoord-instellen` blijft voor de stand `account`;
+- na het inloggen meldt niemand zich aan als klant (`klant_aanmelden` loopt niet): een
+  klantaccount maakt een medewerker.
+
+**Bekende grens bij `vooraf` met Google: een medewerker die Google gebruikt op de klantpagina.**
+`sessie_via_cloudflare()` eist dat een medewerker geen andere identiteit heeft dan
+`custom:cloudflare` en `email`; het token zegt alleen `oauth`, niet welke dienst. Klikt een
+medewerker op de klantpagina op "Doorgaan met Google" met zijn werkadres, dan koppelt Supabase
+Google aan zijn account en heeft hij daarna geen medewerkerrechten meer. Hij komt nergens extra
+bij, er is dus geen gat; de inlogpagina zegt bij de knop dat medewerkers de knop voor medewerkers
+gebruiken. Herstel: de owner haalt de identiteit `google` van dat account weg. Zulke accounts
+vinden (in de SQL-editor van Supabase, alleen lezen):
+
+```sql
+select u.id, u.email, array_agg(i.provider order by i.provider) as identiteiten
+  from auth.users u
+  join auth.identities i on i.user_id = u.id
+ group by u.id, u.email
+having bool_or(i.provider = 'custom:cloudflare') and bool_or(i.provider = 'google');
+```
+
+Daarna, per gevonden account en na een `select` met hetzelfde filter:
+`delete from auth.identities where user_id = '<id>' and provider = 'google';`. De volgende keer
+dat die medewerker via de knop voor medewerkers inlogt, heeft hij zijn rechten weer.
+
 Wat een klant wel zelf in de hand heeft, en waar dus nooit een recht aan mag hangen:
 
 - **Een e-mailadres.** Supabase kent één account per adres, hoe je ook inlogt. Wie bij de
@@ -365,7 +419,8 @@ Wat daarbij hoort:
   van de bezoeker.
 - **Cloudflare is de enige inlogdienst naast mail.** Het token zegt "via een inlogdienst",
   niet welke. Zet daarom in Supabase niet ook Google of Microsoft rechtstreeks aan; hangt er
-  een tweede dienst aan een account, dan zegt de functie nee.
+  een tweede dienst aan een account, dan zegt de functie nee. De enige uitzondering is Google
+  in de stand `vooraf`, voor klanten (zie "Accounts vooraf", met de bekende grens).
 - **Eén account per adres.** Vult een medewerker zijn werkadres in het vak voor klanten in,
   dan bestaat er daarna een klantaccount op dat adres. De inlogpagina wijst medewerkers
   daarom op de knop, en zegt het eerlijk als de knop daardoor vastloopt.

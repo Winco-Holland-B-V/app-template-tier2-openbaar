@@ -1,5 +1,8 @@
 import { data, redirect as omleiding, type RouterContextProvider } from "react-router";
+import { inlogOpslag } from "@/features/auth/inlogcookie.server";
+import { isVooraf } from "@/features/auth/inlogdienst";
 import { CODE_FOUT, CODE_ONGELDIG, leesCode, tweedeStapNodig } from "@/features/auth/tweede-stap";
+import { slaWachtwoordOp } from "@/features/auth/wachtwoord.server";
 import { inlogdiensten } from "@/lib/env";
 import {
   heeftServerDatabase,
@@ -16,6 +19,9 @@ import { volgendePad } from "@/lib/server/veilig-pad";
  * De regels: een GET wijzigt niets; elke wijziging is een formulier (POST). Supabase Auth
  * remt zelf het raden van codes (per factor en per IP-adres), en eist voor het uitzetten van
  * een bevestigde factor een sessie die de tweede stap al deed.
+ *
+ * In de stand `vooraf` (zie inlogdienst.ts) stelt een klant op `/account` ook zijn wachtwoord
+ * in, ook als hij er nog geen had (hij logde in met een code of een link), of wijzigt hij het.
  */
 type Context = Readonly<RouterContextProvider>;
 
@@ -75,6 +81,12 @@ export async function tweedeStapDoen(context: Context, request: Request) {
 
 export type Accountstand = {
   adres: string | null;
+  /** De stand vooraf: het wachtwoord staat op deze pagina, niet op /wachtwoord-instellen. */
+  vooraf: boolean;
+  /** Staat "Doorgaan met Google" aan op de inlogpagina? */
+  google: boolean;
+  /** Eenmalig, na het opslaan van het wachtwoord. */
+  melding: string | null;
   /** Staat de tweede stap aan (een bevestigde authenticator-app)? */
   aan: boolean;
   /** Heeft deze sessie de tweede stap gedaan? Nodig om hem uit te zetten. */
@@ -83,7 +95,10 @@ export type Accountstand = {
 
 export type Accountantwoord =
   | { soort: "inschrijven"; factorId: string; qr: string; geheim: string; melding: string | null }
-  | { soort: "melding"; melding: string };
+  | { soort: "melding"; melding: string }
+  | { soort: "wachtwoord"; melding: string };
+
+const WACHTWOORD_OPGESLAGEN = "wachtwoord-opgeslagen";
 
 /** Wat /account laat zien. */
 export async function accountStand(context: Context): Promise<Accountstand> {
@@ -92,8 +107,14 @@ export async function accountStand(context: Context): Promise<Accountstand> {
   const supabase = supabaseVoorVerzoek(context);
   const factor = await bevestigdeFactor(supabase);
   const { data: niveau } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  const opslag = inlogOpslag(context);
+  const opgeslagen = opslag.getItem("melding") === WACHTWOORD_OPGESLAGEN;
+  if (opgeslagen) opslag.removeItem("melding");
   return {
     adres: wie.email ?? null,
+    vooraf: isVooraf(inlogdiensten),
+    google: inlogdiensten.includes("google"),
+    melding: opgeslagen ? "Je wachtwoord is opgeslagen." : null,
     aan: factor !== null,
     gedaan: niveau?.currentLevel === "aal2",
   };
@@ -158,6 +179,17 @@ export async function accountWijzigen(context: Context, request: Request) {
         { status: 400 },
       );
     }
+    throw redirect("/account");
+  }
+
+  // De stand vooraf: een wachtwoord instellen of wijzigen. Daarna logt de klant ook in met zijn
+  // adres en dat wachtwoord; de code per mail blijft werken.
+  if (doe === "wachtwoord" && isVooraf(inlogdiensten)) {
+    const melding = await slaWachtwoordOp(context, form);
+    if (melding) {
+      return data<Accountantwoord>({ soort: "wachtwoord", melding }, { status: 400 });
+    }
+    inlogOpslag(context).setItem("melding", WACHTWOORD_OPGESLAGEN);
     throw redirect("/account");
   }
 

@@ -1170,3 +1170,225 @@ describe("bescherming die niet stil mag verdwijnen", () => {
     expect(t.verzoeken.filter((v) => naar(v, "/auth/v1/otp"))).toEqual([]);
   });
 });
+
+describe("de stand vooraf (`cloudflare,mailcode,wachtwoord`, eventueel met google)", () => {
+  const VOORAF = "cloudflare,mailcode,wachtwoord";
+  const MET_GOOGLE = "cloudflare,mailcode,google,wachtwoord";
+
+  /** Een sessie van een klant die de tweede stap (2FA) aanzette: een bevestigde factor. */
+  function sessieMetFactor(hulp: Awaited<ReturnType<typeof laad>>["hulp"], email: string) {
+    const gewoon = nieuweSessie(hulp, email);
+    const over = gewoon.expires_at;
+    return {
+      ...gewoon,
+      access_token: hulp.nepJwt({
+        sub: "klant-1",
+        email,
+        exp: over,
+        role: "authenticated",
+        aal: "aal1",
+      }),
+      user: {
+        ...gewoon.user,
+        factors: [{ id: "factor-1", factor_type: "totp", status: "verified" }],
+      },
+    };
+  }
+
+  it("de pagina: het adresveld met de knop voor medewerkers, Google als dat aan staat, en de controle tegen robots", async () => {
+    const zonder = await laad(VOORAF, { VITE_TURNSTILE_SITEKEY: "0x4AAAA-test" });
+    expect(await lees(await zonder.open("/login"))).toMatchObject({
+      stap: "adres",
+      vooraf: true,
+      metMail: true,
+      knoppen: ["cloudflare"],
+      robotSleutel: "0x4AAAA-test",
+    });
+    const met = await laad(MET_GOOGLE);
+    expect(await lees(await met.open("/login"))).toMatchObject({
+      stap: "adres",
+      vooraf: true,
+      knoppen: ["cloudflare", "google"],
+    });
+    // De stand code en de stand account zijn geen vooraf.
+    expect((await lees(await (await laad()).open("/login"))).stap).toBe("adres");
+    expect(await lees(await (await laad()).open("/login"))).toMatchObject({ vooraf: false });
+  });
+
+  it("een code maakt nooit een account; een adres zonder account krijgt hetzelfde antwoord als een bekend adres", async () => {
+    const t = await laad(VOORAF);
+    const antwoorden: string[] = [];
+    for (const vanSupabase of [
+      () => Response.json({}),
+      () =>
+        Response.json(
+          { code: "otp_disabled", msg: "Signups not allowed for otp" },
+          { status: 422 },
+        ),
+    ]) {
+      t.supabase((v) => (naar(v, "/auth/v1/otp") ? vanSupabase() : undefined));
+      const antwoord = await t.verstuur("/login", { doe: "vraag", email: "klant@voorbeeld.nl" });
+      antwoorden.push(
+        JSON.stringify({
+          status: antwoord.status,
+          locatie: antwoord.headers.get("Location"),
+          cookies: [...gezet(antwoord).keys()].filter((naam) => !naam.endsWith("-code-verifier")),
+        }),
+      );
+    }
+    expect(new Set(antwoorden).size).toBe(1);
+    const aanvragen = t.verzoeken.filter((v) => naar(v, "/auth/v1/otp"));
+    expect(aanvragen).toHaveLength(2);
+    for (const aanvraag of aanvragen) {
+      expect(JSON.parse(aanvraag.body)).toMatchObject({
+        email: "klant@voorbeeld.nl",
+        create_user: false,
+      });
+    }
+  });
+
+  it("de link van een medewerker (uitnodiging, inlogmail of herstel) toont bij een GET alleen het formulier, en er gaat niets naar Supabase", async () => {
+    const t = await laad(VOORAF);
+    for (const type of ["email", "invite", "recovery"]) {
+      const antwoord = await t.open(`/login?token_hash=${TOKEN_HASH}&type=${type}`);
+      expect(await lees(antwoord), type).toMatchObject({ stap: "link", vooraf: true });
+      expect(antwoord.headers.getSetCookie()).toEqual([]);
+    }
+    // Een link voor een nieuw adres neemt de pagina nooit aan.
+    const wijziging = await t.open(`/login?token_hash=${TOKEN_HASH}&type=email_change`);
+    expect((await lees(wijziging)).stap).toBe("adres");
+    expect(t.verzoeken).toEqual([]);
+  });
+
+  it("het formulier wisselt een uitnodiging om met haar eigen soort, zonder aanmelding als klant", async () => {
+    const t = await laad(VOORAF);
+    for (const type of ["invite", "recovery", "email"]) {
+      t.verzoeken.length = 0;
+      t.supabase((v) =>
+        naar(v, "/auth/v1/verify")
+          ? Response.json(nieuweSessie(t.hulp, "klant@voorbeeld.nl"))
+          : undefined,
+      );
+      const antwoord = await t.verstuur(`/login?token_hash=${TOKEN_HASH}&type=${type}`, {
+        doe: "link",
+      });
+      expect(antwoord.status, type).toBe(302);
+      expect(antwoord.headers.get("Location")).toBe("/");
+      expect(gezet(antwoord).has(SESSIE)).toBe(true);
+      const controle = t.verzoeken.find((v) => naar(v, "/auth/v1/verify"));
+      expect(JSON.parse(controle?.body ?? "{}")).toMatchObject({ token_hash: TOKEN_HASH, type });
+      // Een account maakt een medewerker: niemand meldt zich hier aan als klant.
+      expect(t.verzoeken.some((v) => v.adres.includes("/rpc/"))).toBe(false);
+    }
+  });
+
+  it("een verbruikte of verlopen link: terug naar de inlogpagina, met de melding en het adresveld voor een code", async () => {
+    const t = await laad(VOORAF);
+    t.supabase((v) =>
+      naar(v, "/auth/v1/verify")
+        ? Response.json(
+            { error_code: "otp_expired", msg: "Email link is invalid or has expired" },
+            { status: 403 },
+          )
+        : undefined,
+    );
+    const antwoord = await t.verstuur(`/login?token_hash=${TOKEN_HASH}&type=invite`, {
+      doe: "link",
+    });
+    expect(antwoord.headers.get("Location")).toBe("/login");
+    expect(gezet(antwoord).has(SESSIE)).toBe(false);
+    const daarna = await t.open("/login", t.cookie(onthouden(antwoord)));
+    expect(await lees(daarna)).toMatchObject({ stap: "adres", fout: { soort: "link" } });
+  });
+
+  it("de tweede stap: na een link of een code eerst de code uit de app, als de klant die aanzette", async () => {
+    const t = await laad(VOORAF);
+    t.supabase((v) =>
+      naar(v, "/auth/v1/verify")
+        ? Response.json(sessieMetFactor(t.hulp, "klant@voorbeeld.nl"))
+        : undefined,
+    );
+    const link = await t.verstuur(
+      `/login?token_hash=${TOKEN_HASH}&type=email`,
+      { doe: "link" },
+      { Cookie: t.cookie({ volgende: "/wagen" }) },
+    );
+    expect(link.headers.get("Location")).toBe("/tweede-stap?volgende=%2Fwagen");
+    const code = await t.verstuur("/login", {
+      doe: "code",
+      email: "klant@voorbeeld.nl",
+      code: "1234567890",
+    });
+    expect(code.headers.get("Location")).toBe("/tweede-stap");
+    // Zonder factor gewoon door.
+    t.supabase((v) =>
+      naar(v, "/auth/v1/verify")
+        ? Response.json(nieuweSessie(t.hulp, "klant@voorbeeld.nl"))
+        : undefined,
+    );
+    const gewoon = await t.verstuur("/login", {
+      doe: "code",
+      email: "klant@voorbeeld.nl",
+      code: "1234567890",
+    });
+    expect(gewoon.headers.get("Location")).toBe("/");
+    expect(t.verzoeken.some((v) => v.adres.includes("/rpc/klant_aanmelden"))).toBe(false);
+  });
+
+  it("inloggen met wachtwoord staat op /login?met=wachtwoord; zonder vooraf bestaat die keuze niet", async () => {
+    const t = await laad(VOORAF);
+    expect(await lees(await t.open("/login?met=wachtwoord"))).toMatchObject({
+      stap: "wachtwoord",
+      vooraf: true,
+      knoppen: ["cloudflare"],
+    });
+    t.supabase((v) =>
+      naar(v, "/auth/v1/token")
+        ? Response.json(nieuweSessie(t.hulp, "klant@voorbeeld.nl"))
+        : undefined,
+    );
+    const goed = await t.verstuur("/login?met=wachtwoord", {
+      doe: "wachtwoord",
+      email: "klant@voorbeeld.nl",
+      password: "een-lang-wachtwoord",
+    });
+    expect(goed.status).toBe(302);
+    expect(goed.headers.get("Location")).toBe("/");
+    expect(gezet(goed).has(SESSIE)).toBe(true);
+    expect(t.verzoeken.some((v) => v.adres.includes("/rpc/"))).toBe(false);
+    // In de stand code is `met=wachtwoord` niets: gewoon het adresveld, en het formulier weigert.
+    const code = await laad();
+    expect((await lees(await code.open("/login?met=wachtwoord"))).stap).toBe("adres");
+  });
+
+  it("Doorgaan met Google: de server begint de inlog bij Google, terug op /login/terug", async () => {
+    const t = await laad(MET_GOOGLE);
+    const antwoord = await t.verstuur("/login", { doe: "dienst", dienst: "google" });
+    expect(antwoord.status).toBe(200);
+    const { soort, naar: adres = "" } = await lees(antwoord);
+    expect(soort).toBe("naar-dienst");
+    const doel = new URL(adres);
+    expect(doel.origin).toBe(SUPABASE);
+    expect(doel.searchParams.get("provider")).toBe("google");
+    expect(doel.searchParams.get("redirect_to")).toBe(`${APP}/login/terug`);
+    // Zonder google in de lijst geen knop.
+    const zonder = await laad(VOORAF);
+    expect((await zonder.verstuur("/login", { doe: "dienst", dienst: "google" })).status).toBe(400);
+  });
+
+  it("terug van Google met de tweede stap aan: eerst de code uit de app", async () => {
+    const t = await laad(MET_GOOGLE);
+    const CODE = "11111111-2222-3333-4444-555555555555";
+    const verifier = `${SESSIE}-code-verifier=base64-${Buffer.from(JSON.stringify("geheime-helft")).toString("base64url")}`;
+    t.supabase((v) =>
+      naar(v, "/auth/v1/token")
+        ? Response.json(sessieMetFactor(t.hulp, "klant@voorbeeld.nl"))
+        : undefined,
+    );
+    const merk = t.cookie({ "inlog-via-dienst": String(Date.now()), volgende: "/wagen" });
+    const antwoord = await t.terug(`/login/terug?code=${CODE}`, `${merk}; ${verifier}`);
+    expect(antwoord.status).toBe(302);
+    expect(antwoord.headers.get("Location")).toBe("/tweede-stap?volgende=%2Fwagen");
+    expect(t.verzoeken.some((v) => naar(v, "/rest/v1/rpc/klant_aanmelden"))).toBe(false);
+  });
+});

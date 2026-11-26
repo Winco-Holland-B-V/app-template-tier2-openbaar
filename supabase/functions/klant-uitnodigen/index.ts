@@ -7,6 +7,10 @@
 //
 // De uitnodigingsmail verstuurt Supabase Auth (sjabloon invite, supabase/templates/uitnodiging.html).
 // Buiten productie weigert de functie elk ander adres dan het testadres (zie magUitnodigen).
+//
+// De stand `vooraf` stuurt `{ "e_mail": ..., "inloglink": true }`: een adres zonder account krijgt
+// de uitnodiging (in die stand een inlogmail), een klantaccount een inlogmail van Supabase Auth
+// (POST /auth/v1/otp, create_user false). Een medewerker weigert ze. Zie kern.ts.
 
 import { richtMail } from "../_shared/mail.ts";
 import { CORS, uitnodigen } from "./kern.ts";

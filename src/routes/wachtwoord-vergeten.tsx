@@ -12,8 +12,8 @@ import { SITE } from "@/site";
 
 /**
  * `/wachtwoord-vergeten`: een nieuwe link aanvragen. Altijd hetzelfde antwoord, of het adres
- * een account heeft of niet; er ontstaat hier nooit een account. Zie
- * src/features/auth/wachtwoord.server.ts.
+ * een account heeft of niet; er ontstaat hier nooit een account. In de stand vooraf stuurt de
+ * pagina door naar /login (inloggen met een code). Zie src/features/auth/wachtwoord.server.ts.
  *
  * Zonder de types uit ./+types: zo blijft dit bestand ook geldig in een app die de pagina (nog)
  * niet in src/routes.ts heeft (een klantportaal met een code per mail).

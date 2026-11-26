@@ -395,7 +395,9 @@ Eén pull request, als concept, met in de tekst:
 **Wat de owner daarna doet.** Na de merge, in de beheer-repo: de deur van Cloudflare voor het
 eigen domein uitzetten, de inlog per mail (de code) aanzetten in Supabase, en
 `VITE_INLOGDIENST` op `cloudflare,mailcode` zetten (met `"klantportaal_inloggen": "account"` in
-`toegang.json`: `cloudflare,wachtwoord`, zie "Klantaccounts" in `docs/WERKWIJZE.md`). Zolang dat niet gebeurd is, toont de app
+`toegang.json`: `cloudflare,wachtwoord`, en met `"vooraf"`: `cloudflare,mailcode,wachtwoord` of met
+Google `cloudflare,mailcode,google,wachtwoord`; zie "Klantaccounts" en "Accounts vooraf" in
+`docs/WERKWIJZE.md`). Zolang dat niet gebeurd is, toont de app
 in productie "Deze app is nog niet ingericht" in plaats van een inlogformulier dat nergens
 werkt. Dat is werk van de owner, niet van de bouwer: zeg het de bouwer, en wacht er niet op.
 

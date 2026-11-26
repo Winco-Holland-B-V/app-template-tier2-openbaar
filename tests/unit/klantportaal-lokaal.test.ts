@@ -90,3 +90,23 @@ describe("CI: de mailvanger draait mee", () => {
     expect(lees("scripts/write-local-env.mjs")).toContain("SUPABASE_MAIL_URL=");
   });
 });
+
+describe("supabase/templates/inlogmail-vooraf.html: de inlogmail van de stand vooraf", () => {
+  const mail = lees("supabase/templates/inlogmail-vooraf.html");
+  const tekst = mail.split("-->")[1] ?? "";
+
+  it("de code en de knop met de vaste id's, naar de inlogpagina van de app zelf", () => {
+    expect(tekst).toContain('<span id="code">{{ .Token }}</span>');
+    expect(tekst).toContain(
+      'id="link" href="{{ .SiteURL }}/login?token_hash={{ .TokenHash }}&type=email"',
+    );
+    expect(tekst).not.toContain("RedirectTo");
+    expect(tekst).not.toContain("ConfirmationURL");
+  });
+
+  it("zegt dat link en code een dag werken, en wat je doet als je er niet om vroeg", () => {
+    expect(tekst).toContain("een dag");
+    expect(tekst).toContain("Heb je hier niet om gevraagd?");
+    expect(tekst).not.toMatch(/één keer|eenmalig/i);
+  });
+});

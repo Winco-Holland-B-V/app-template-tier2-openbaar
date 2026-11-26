@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { bepaalOntvangers, type MailOmgeving } from "../../supabase/functions/_shared/mail";
 import {
+  isKlantaccount,
   leesVerzoek,
   magUitnodigen,
   type Omgeving,
@@ -59,6 +60,12 @@ describe("leesVerzoek", () => {
     expect(leesVerzoek({ e_mail: "  Piet@Klant.NL " })).toEqual({
       e_mail: "piet@klant.nl",
       naam: null,
+      inloglink: false,
+    });
+    // Alleen precies `true` zet de inloglink aan.
+    expect(leesVerzoek({ e_mail: "a@b.nl", inloglink: true })).toMatchObject({ inloglink: true });
+    expect(leesVerzoek({ e_mail: "a@b.nl", inloglink: "true" })).toMatchObject({
+      inloglink: false,
     });
   });
 
@@ -67,6 +74,7 @@ describe("leesVerzoek", () => {
     expect(leesVerzoek({ e_mail: "a@b.nl", sleutel: "zelf-gekozen" })).toEqual({
       e_mail: "a@b.nl",
       naam: null,
+      inloglink: false,
     });
     expect(typeof leesVerzoek(null)).toBe("string");
   });
@@ -155,6 +163,167 @@ describe("uitnodigen", () => {
     const uit = await uitnodigen(
       MEDEWERKER,
       { e_mail: "echte-klant@klant.nl" },
+      omgeving(nep, { omgeving: "test", testmailAdres: "test@voorbeeld.nl" }),
+    );
+    expect(uit.status).toBe(400);
+    expect(verzoeken.map((v) => v.pad)).toEqual(["/rest/v1/rpc/is_medewerker"]);
+  });
+});
+
+describe("isKlantaccount", () => {
+  it("alleen email, of email en google; niet Cloudflare, niet zonder identiteit", () => {
+    expect(isKlantaccount({ identities: [{ provider: "email" }] })).toBe(true);
+    expect(isKlantaccount({ identities: [{ provider: "email" }, { provider: "google" }] })).toBe(
+      true,
+    );
+    expect(isKlantaccount({ app_metadata: { provider: "email", providers: ["email"] } })).toBe(
+      true,
+    );
+    expect(
+      isKlantaccount({ identities: [{ provider: "email" }, { provider: "custom:cloudflare" }] }),
+    ).toBe(false);
+    // Ook als alleen app_metadata het zegt.
+    expect(
+      isKlantaccount({
+        identities: [{ provider: "email" }],
+        app_metadata: { providers: ["email", "custom:cloudflare"] },
+      }),
+    ).toBe(false);
+    expect(isKlantaccount({ identities: [] })).toBe(false);
+  });
+});
+
+describe("uitnodigen met een inloglink (de stand vooraf)", () => {
+  const ZOEK = "GET /auth/v1/admin/users";
+  const account = (email: string, ...providers: string[]) => ({
+    json: { users: [{ email, identities: providers.map((provider) => ({ provider })) }] },
+  });
+
+  it("zonder inloglink zoekt de functie geen account op: precies de stappen van de stand account", async () => {
+    const { nep, verzoeken } = nepSupabase(GOED);
+    const uit = await uitnodigen(MEDEWERKER, { e_mail: "piet@klant.nl" }, omgeving(nep));
+    expect(uit).toEqual({ status: 200, body: { ok: true, e_mail: "piet@klant.nl" } });
+    expect(verzoeken.map((v) => `${v.methode} ${v.pad}`)).toEqual([
+      "POST /rest/v1/rpc/is_medewerker",
+      "POST /rest/v1/klant_uitnodigingen",
+      "POST /auth/v1/invite",
+      "POST /rest/v1/rpc/klant_uitnodiging_afronden",
+    ]);
+  });
+
+  it("geen account: de uitnodiging zoals altijd, en de lijst krijgt alleen adres, naam en sleutel", async () => {
+    const { nep, verzoeken } = nepSupabase({ ...GOED, [ZOEK]: { json: { users: [] } } });
+    const uit = await uitnodigen(
+      MEDEWERKER,
+      { e_mail: "piet@klant.nl", naam: "Piet", inloglink: true },
+      omgeving(nep),
+    );
+    expect(uit).toEqual({
+      status: 200,
+      body: { ok: true, e_mail: "piet@klant.nl", soort: "uitnodiging" },
+    });
+    const zoek = verzoeken.find((v) => v.pad === "/auth/v1/admin/users");
+    expect(zoek?.kop.Authorization).toBe("Bearer dienst");
+    const lijst = verzoeken.find((v) => v.pad === "/rest/v1/klant_uitnodigingen");
+    expect(JSON.parse(lijst?.body ?? "{}")).toEqual({
+      e_mail: "piet@klant.nl",
+      naam: "Piet",
+      sleutel: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(verzoeken.some((v) => v.pad === "/auth/v1/invite")).toBe(true);
+    expect(verzoeken.some((v) => v.pad === "/auth/v1/otp")).toBe(false);
+  });
+
+  it("een ander account dat maar op het adres lijkt, telt niet als hetzelfde adres", async () => {
+    const { nep, verzoeken } = nepSupabase({ ...GOED, [ZOEK]: account("xpiet@klant.nl", "email") });
+    const uit = await uitnodigen(
+      MEDEWERKER,
+      { e_mail: "piet@klant.nl", inloglink: true },
+      omgeving(nep),
+    );
+    expect(uit.body.soort).toBe("uitnodiging");
+    expect(verzoeken.some((v) => v.pad === "/auth/v1/otp")).toBe(false);
+  });
+
+  for (const providers of [["email"], ["email", "google"]]) {
+    it(`een klantaccount (${providers.join(" en ")}): Supabase stuurt een inlogmail, de functie geeft geen link of code terug`, async () => {
+      const { nep, verzoeken } = nepSupabase({
+        ...GOED,
+        [ZOEK]: account("piet@klant.nl", ...providers),
+        "POST /auth/v1/otp": { json: {} },
+      });
+      const uit = await uitnodigen(
+        MEDEWERKER,
+        { e_mail: "Piet@Klant.nl", inloglink: true },
+        omgeving(nep),
+      );
+      expect(uit).toEqual({
+        status: 200,
+        body: { ok: true, e_mail: "piet@klant.nl", soort: "inloglink" },
+      });
+      const otp = verzoeken.find((v) => v.pad === "/auth/v1/otp");
+      expect(otp?.kop.apikey).toBe("dienst");
+      expect(otp?.kop.Authorization).toBe("Bearer dienst");
+      expect(JSON.parse(otp?.body ?? "{}")).toEqual({
+        email: "piet@klant.nl",
+        create_user: false,
+      });
+      // Niets op de lijst, geen uitnodiging, geen koppeling.
+      expect(verzoeken.map((v) => v.pad)).toEqual([
+        "/rest/v1/rpc/is_medewerker",
+        "/auth/v1/admin/users",
+        "/auth/v1/otp",
+      ]);
+    });
+  }
+
+  it("een medewerker (identiteit van Cloudflare): geweigerd, er gaat geen mail weg", async () => {
+    const { nep, verzoeken } = nepSupabase({
+      ...GOED,
+      [ZOEK]: account("baas@klant.nl", "email", "custom:cloudflare"),
+    });
+    const uit = await uitnodigen(
+      MEDEWERKER,
+      { e_mail: "baas@klant.nl", inloglink: true },
+      omgeving(nep),
+    );
+    expect(uit.status).toBe(409);
+    expect(uit.body.code).toBe("andere_inlog");
+    expect(verzoeken.map((v) => v.pad)).toEqual([
+      "/rest/v1/rpc/is_medewerker",
+      "/auth/v1/admin/users",
+    ]);
+  });
+
+  it("net al een mail gestuurd: een nette melding; opzoeken mislukt: geen uitnodiging", async () => {
+    const teVaak = nepSupabase({
+      ...GOED,
+      [ZOEK]: account("piet@klant.nl", "email"),
+      "POST /auth/v1/otp": { status: 429, tekst: '{"error_code":"over_email_send_rate_limit"}' },
+    });
+    const uit = await uitnodigen(
+      MEDEWERKER,
+      { e_mail: "piet@klant.nl", inloglink: true },
+      omgeving(teVaak.nep),
+    );
+    expect(uit.status).toBe(429);
+    expect(uit.body.code).toBe("te_vaak");
+
+    const stuk = nepSupabase({ ...GOED, [ZOEK]: { status: 500, tekst: "storing" } });
+    const fout = await uitnodigen(
+      MEDEWERKER,
+      { e_mail: "piet@klant.nl", inloglink: true },
+      omgeving(stuk.nep),
+    );
+    expect(fout.status).toBe(502);
+    expect(stuk.verzoeken.some((v) => v.pad === "/auth/v1/invite")).toBe(false);
+  });
+
+  it("in de testomgeving een ander adres dan het testadres: geweigerd vóór er iets wordt opgezocht", async () => {
+    const { nep, verzoeken } = nepSupabase(GOED);
+    const uit = await uitnodigen(
+      MEDEWERKER,
+      { e_mail: "echte-klant@klant.nl", inloglink: true },
       omgeving(nep, { omgeving: "test", testmailAdres: "test@voorbeeld.nl" }),
     );
     expect(uit.status).toBe(400);

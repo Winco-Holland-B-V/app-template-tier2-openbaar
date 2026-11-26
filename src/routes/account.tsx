@@ -12,7 +12,8 @@ import { SITE } from "@/site";
 
 /**
  * `/account`: Mijn account voor een klant met een wachtwoord. Hier zet hij de tweede stap (2FA)
- * aan of uit en wijzigt hij zijn wachtwoord. Zie src/features/auth/tweede-stap.server.ts.
+ * aan of uit en wijzigt hij zijn wachtwoord; in de stand vooraf stelt hij het hier ook voor het
+ * eerst in. Zie src/features/auth/tweede-stap.server.ts.
  */
 export function loader({ context }: LoaderFunctionArgs) {
   return accountStand(context);

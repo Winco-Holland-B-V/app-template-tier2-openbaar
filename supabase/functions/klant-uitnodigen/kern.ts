@@ -8,6 +8,16 @@
 //   3. het account met een uitnodigingsmail (Supabase Auth, met de service role). De sleutel gaat
 //      mee in de gegevens van het account; de hook nieuw_account_toestaan controleert hem;
 //   4. klant_uitnodiging_afronden (service role): goedgekeurd op klanten.
+//
+// Met `"inloglink": true` in de body (de stand `vooraf` van een klantportaal, zie
+// src/features/auth/inlogdienst.ts) kijkt de functie eerst of het adres al een account heeft:
+//   - geen account: de stappen hierboven; de mail `invite` is in die stand een inlogmail;
+//   - een klantaccount (alleen de identiteit `email`, eventueel ook `google`): Supabase Auth stuurt
+//     met de service role een inlogmail (`POST /auth/v1/otp` met `create_user: false`, de mail
+//     `magic_link`). Er komt niets op de lijst en er verandert niets aan het account;
+//   - een account met een andere identiteit (een medewerker via Cloudflare): geweigerd.
+// De functie geeft nooit een link of code terug: die staan alleen in de mail aan de klant.
+// Zonder `inloglink` doet de functie precies wat ze in de stand `account` doet.
 
 /**
  * De regel van richtMail (_shared/mail.ts) voor één mail: geeft de ontvangers zoals ze echt weg
@@ -24,11 +34,11 @@ export const CORS = {
   "access-control-allow-methods": "POST, OPTIONS",
 };
 
-export type Verzoek = { e_mail: string; naam: string | null };
+export type Verzoek = { e_mail: string; naam: string | null; inloglink: boolean };
 
 const ADRES = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Leest de invoer van de app: een adres, en eventueel een naam. Of een fout. */
+/** Leest de invoer van de app: een adres, eventueel een naam en `inloglink: true`. Of een fout. */
 export function leesVerzoek(body: unknown): Verzoek | string {
   if (body === null || typeof body !== "object") return "Geen geldige invoer.";
   const ruw = body as Record<string, unknown>;
@@ -36,7 +46,35 @@ export function leesVerzoek(body: unknown): Verzoek | string {
   if (e_mail.length > 320 || !ADRES.test(e_mail)) return "Vul een geldig e-mailadres in.";
   let naam: string | null = null;
   if (typeof ruw.naam === "string" && ruw.naam.trim() !== "") naam = ruw.naam.trim().slice(0, 200);
-  return { e_mail, naam };
+  return { e_mail, naam, inloglink: ruw.inloglink === true };
+}
+
+/** De identiteiten van een klantaccount: inloggen per mail (code, link, wachtwoord) en Google. */
+const KLANTIDENTITEITEN = new Set(["email", "google"]);
+
+type Account = {
+  email?: string;
+  identities?: { provider?: string }[] | null;
+  app_metadata?: { provider?: string; providers?: string[] };
+};
+
+/** Alle inlogdiensten van een account, uit zijn identiteiten en uit app_metadata. */
+export function identiteitenVan(account: Account): string[] {
+  const namen = new Set<string>();
+  for (const identiteit of account.identities ?? []) {
+    if (typeof identiteit.provider === "string") namen.add(identiteit.provider);
+  }
+  for (const naam of account.app_metadata?.providers ?? []) {
+    if (typeof naam === "string") namen.add(naam);
+  }
+  if (typeof account.app_metadata?.provider === "string") namen.add(account.app_metadata.provider);
+  return [...namen];
+}
+
+/** Een klantaccount: minstens één identiteit, en alleen `email` en `google`. */
+export function isKlantaccount(account: Account): boolean {
+  const namen = identiteitenVan(account);
+  return namen.length > 0 && namen.every((naam) => KLANTIDENTITEITEN.has(naam));
 }
 
 /**
@@ -110,12 +148,49 @@ export async function uitnodigen(
     );
   }
 
+  // De stand vooraf: heeft het adres al een account, dan een inlogmail in plaats van een uitnodiging.
+  if (verzoek.inloglink) {
+    const bestaand = await zoekAccount(verzoek.e_mail, o, alsDienst);
+    if (bestaand === "fout")
+      return fout(502, "Opzoeken of dit adres een account heeft lukte niet.");
+    if (bestaand) {
+      if (!isKlantaccount(bestaand)) {
+        return fout(
+          409,
+          "Dit e-mailadres hoort bij een account dat op een andere manier inlogt, bijvoorbeeld een medewerker. Daar gaat geen inloglink heen.",
+          "andere_inlog",
+        );
+      }
+      const otp = await o.fetch(`${o.url}/auth/v1/otp`, {
+        method: "POST",
+        headers: alsDienst,
+        body: JSON.stringify({ email: verzoek.e_mail, create_user: false }),
+      });
+      if (!otp.ok) {
+        const tekst = await otp.text();
+        if (otp.status === 429 || /over_email_send_rate_limit|rate limit/i.test(tekst)) {
+          return fout(
+            429,
+            "Er is net al een inlogmail naar dit adres gestuurd. Probeer het over een minuut opnieuw.",
+            "te_vaak",
+          );
+        }
+        return fout(
+          502,
+          `De inlogmail versturen lukte niet (${otp.status}: ${tekst.slice(0, 300)}).`,
+        );
+      }
+      // Alleen dat het gelukt is: de link en de code staan in de mail, nergens anders.
+      return { status: 200, body: { ok: true, e_mail: verzoek.e_mail, soort: "inloglink" } };
+    }
+  }
+
   // 2. Op de lijst, met het token van de medewerker: RLS beslist.
   const sleutel = o.nieuweSleutel();
   const lijst = await o.fetch(`${o.url}/rest/v1/klant_uitnodigingen?select=id`, {
     method: "POST",
     headers: { ...alsAanroeper, Prefer: "return=representation" },
-    body: JSON.stringify({ ...verzoek, sleutel }),
+    body: JSON.stringify({ e_mail: verzoek.e_mail, naam: verzoek.naam, sleutel }),
   });
   if (!lijst.ok) return fout(502, `Op de lijst zetten lukte niet (${lijst.status}).`);
   const rij = ((await lijst.json()) as { id?: string }[])[0];
@@ -156,5 +231,28 @@ export async function uitnodigen(
   if (!afronden.ok) {
     return fout(502, `Het account koppelen lukte niet (${afronden.status}).`);
   }
-  return { status: 200, body: { ok: true, e_mail: verzoek.e_mail } };
+  return {
+    status: 200,
+    body: verzoek.inloglink
+      ? { ok: true, e_mail: verzoek.e_mail, soort: "uitnodiging" }
+      : { ok: true, e_mail: verzoek.e_mail },
+  };
+}
+
+/**
+ * Het account op dit adres, als het er een is (Supabase Auth, met de service role). `filter`
+ * zoekt op een deel van het adres; daarom vergelijkt de functie daarna het hele adres.
+ */
+async function zoekAccount(
+  e_mail: string,
+  o: Omgeving,
+  alsDienst: Record<string, string>,
+): Promise<Account | null | "fout"> {
+  const antwoord = await o.fetch(
+    `${o.url}/auth/v1/admin/users?filter=${encodeURIComponent(e_mail)}&page=1&per_page=50`,
+    { method: "GET", headers: alsDienst },
+  );
+  if (!antwoord.ok) return "fout";
+  const lijst = (await antwoord.json()) as { users?: Account[] } | null;
+  return lijst?.users?.find((account) => account.email?.toLowerCase() === e_mail) ?? null;
 }

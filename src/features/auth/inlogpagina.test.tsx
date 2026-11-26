@@ -13,6 +13,7 @@ import { fout } from "./mailcode";
  */
 const BASIS = {
   metMail: true,
+  vooraf: false,
   knoppen: ["cloudflare" as const],
   robotSleutel: null,
   volgende: "/",
@@ -202,6 +203,87 @@ describe("de inlogpagina, kant-en-klaar van de server", () => {
     expect(doe).toEqual(["testlogin", "wachtwoord"]);
     expect(pagina).toContain("testgebruiker@stagetwo.nl");
     expect(formulieren(pagina)[0]).not.toContain('type="password"');
+  });
+});
+
+describe("de stand vooraf", () => {
+  const VOORAF = { ...BASIS, vooraf: true, knoppen: ["cloudflare" as const, "google" as const] };
+
+  it("het begin: Stuur me een code, daaronder Doorgaan met Google, de knop voor medewerkers en klein Inloggen met wachtwoord", () => {
+    const pagina = teken({ ...VOORAF, stap: "adres", email: "", fout: null });
+    expect(pagina).toContain("Stuur me een code");
+    expect(pagina).toContain("Doorgaan met Google");
+    expect(pagina).toContain(
+      "Medewerker? Log in met de knop Inloggen voor medewerkers, niet met Google.",
+    );
+    expect(pagina).toContain('href="/login?met=wachtwoord"');
+    const lijst = formulieren(pagina);
+    const doe = lijst.map((f) => /name="doe" value="([^"]+)"/.exec(f)?.[1]);
+    expect(doe).toEqual(["vraag", "dienst", "dienst"]);
+    // Google eerst, de knop voor medewerkers als laatste.
+    expect(lijst[1]).toContain('name="dienst" value="google"');
+    expect(lijst[2]).toContain('name="dienst" value="cloudflare"');
+    // De oude regel van de stand code staat er niet.
+    expect(pagina).not.toContain("Werk je hier?");
+  });
+
+  it("zonder Google: geen knop en geen zin over Google; het pad waar de bezoeker heen wilde gaat mee", () => {
+    const pagina = teken(
+      {
+        ...VOORAF,
+        knoppen: ["cloudflare"],
+        stap: "adres",
+        email: "",
+        fout: null,
+        volgende: "/wagen",
+      },
+      undefined,
+      "/login?volgende=%2Fwagen",
+    );
+    expect(pagina).not.toContain("Google");
+    expect(pagina).toContain('href="/login?met=wachtwoord&amp;volgende=%2Fwagen"');
+  });
+
+  it("een verbruikte link: de melding bij het adresveld en Stuur me een code", () => {
+    const pagina = teken({ ...VOORAF, stap: "adres", email: "", fout: fout("link") });
+    expect(pagina).toContain("Deze link is verlopen of al gebruikt.");
+    expect(pagina).toContain("Stuur me een code");
+  });
+
+  it("de link uit de mail: geen waarschuwing, één knop voor wie geen JavaScript heeft", () => {
+    const adres = "/login?token_hash=pkce_0123456789abcdef&type=invite";
+    const pagina = teken({ ...VOORAF, stap: "link", hierAangevraagd: false }, undefined, adres);
+    expect(pagina).not.toContain("link-waarschuwing");
+    expect(pagina).toContain("Je wordt ingelogd.");
+    const [formulier] = formulieren(pagina);
+    expect(formulier).toContain('method="post"');
+    expect(formulier).toContain('action="/login?token_hash=pkce_0123456789abcdef&amp;type=invite"');
+    expect(formulier).toContain('name="doe" value="link"');
+  });
+
+  it("de code: een dag geldig", () => {
+    const pagina = teken({
+      ...VOORAF,
+      stap: "code",
+      email: "klant@voorbeeld.nl",
+      verstuurdOp: 1_700_000_000_000,
+      wachtNog: 0,
+      fout: null,
+      melding: null,
+    });
+    expect(pagina).toContain("De code werkt een dag.");
+  });
+
+  it("inloggen met wachtwoord: geen Wachtwoord vergeten, maar terug naar de code", () => {
+    const pagina = teken(
+      { ...VOORAF, stap: "wachtwoord", testlogin: null, fout: null },
+      undefined,
+      "/login?met=wachtwoord",
+    );
+    expect(pagina).toContain('type="password"');
+    expect(pagina).not.toContain("/wachtwoord-vergeten");
+    expect(pagina).toContain('href="/login"');
+    expect(pagina).toContain("Log in met een code per mail.");
   });
 });
 
